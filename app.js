@@ -17,7 +17,7 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const S = {
   user: null,
   tasks: [], locations: [], completions: [], workEntries: [], settings: {},
-  locFilter: "ALLE", tagFilter: null, tab: "tasks",
+  locFilter: "ALLE", tagFilter: null, tab: "home",
   expanded: new Set(),   // task ids with open subtasks
   tickTimer: null,
 };
@@ -423,13 +423,14 @@ $("#modalBg").addEventListener("click", e=>{ if(e.target.id==="modalBg") closeMo
 function switchTab(tab){
   S.tab = tab;
   $$(".tabbar button").forEach(b=>b.classList.toggle("active", b.dataset.tab===tab));
-  ["tasks","work","stats","archive"].forEach(v=>$("#view-"+v).classList.toggle("hidden", v!==tab));
-  $("#pageTitle").textContent = {tasks:"Aufgaben",work:"Arbeitszeit",stats:"Statistik",archive:"Archiv"}[tab];
+  ["home","tasks","work","stats","archive"].forEach(v=>$("#view-"+v).classList.toggle("hidden", v!==tab));
+  $("#pageTitle").textContent = {home:"Heute",tasks:"Aufgaben",work:"Arbeitszeit",stats:"Statistik",archive:"Archiv"}[tab];
   $("#fab").classList.toggle("hidden", tab==="stats" || tab==="archive");
   renderAll();
 }
 
 function renderAll(){
+  if (S.tab==="home") renderHome();
   if (S.tab==="tasks") renderTasks();
   if (S.tab==="work") renderWork();
   if (S.tab==="stats") renderStats();
@@ -445,7 +446,7 @@ function startApp(){
   initRealtime();
   loadAll();
   // Ticker für laufende Stempeluhr & Cooldowns
-  S.tickTimer = setInterval(()=>{ if(S.tab==="work") renderWork(); }, 30000);
+  S.tickTimer = setInterval(()=>{ if(S.tab==="work") renderWork(); if(S.tab==="home") renderHome(); }, 30000);
   // Service Worker
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 }
@@ -940,4 +941,174 @@ async function importBackup(json){
   closeModal();
   toast(`✓ Import fertig: ${m.tasks.length} Aufgaben, ${newLocs.length} neue Orte, ${m.work_entries.length} Arbeitszeiten`);
   loadAll();
+}
+
+// ============================================================
+// Heute (Home-Dashboard): Wetter, Tagesplan, Fortschritt
+// ============================================================
+const WMO = { // Open-Meteo Wettercodes -> [Emoji, Text]
+  0:["☀️","Klar"],1:["🌤","Überwiegend klar"],2:["⛅️","Teils bewölkt"],3:["☁️","Bedeckt"],
+  45:["🌫","Nebel"],48:["🌫","Reifnebel"],51:["🌦","Leichter Niesel"],53:["🌦","Niesel"],55:["🌧","Starker Niesel"],
+  61:["🌦","Leichter Regen"],63:["🌧","Regen"],65:["🌧","Starker Regen"],66:["🌧","Gefr. Regen"],67:["🌧","Gefr. Regen"],
+  71:["🌨","Leichter Schnee"],73:["🌨","Schnee"],75:["❄️","Starker Schnee"],77:["❄️","Schneegriesel"],
+  80:["🌦","Regenschauer"],81:["🌧","Regenschauer"],82:["⛈","Heftige Schauer"],
+  85:["🌨","Schneeschauer"],86:["🌨","Schneeschauer"],95:["⛈","Gewitter"],96:["⛈","Gewitter m. Hagel"],99:["⛈","Gewitter m. Hagel"],
+};
+let weatherCache = null; // {ts, data}
+
+async function fetchWeather(){
+  const loc = JSON.parse(localStorage.getItem("wopGeo")||"null");
+  if (!loc) return null;
+  if (weatherCache && Date.now()-weatherCache.ts < 30*60000) return weatherCache.data;
+  try {
+    const u = `https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}`+
+      `&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m`+
+      `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code&timezone=auto&forecast_days=2`;
+    const r = await fetch(u); const d = await r.json();
+    weatherCache = { ts: Date.now(), data: d };
+    return d;
+  } catch(e){ return null; }
+}
+function askGeo(){
+  if (!navigator.geolocation) return toast("Standort wird nicht unterstützt.", true);
+  navigator.geolocation.getCurrentPosition(p=>{
+    localStorage.setItem("wopGeo", JSON.stringify({lat:+p.coords.latitude.toFixed(3), lon:+p.coords.longitude.toFixed(3)}));
+    weatherCache=null; renderHome();
+  }, ()=>toast("Standort nicht erlaubt – Wetter bleibt aus.", true), {timeout:8000});
+}
+
+function greetingText(){
+  const h = new Date().getHours();
+  if (h<5) return "Gute Nacht";
+  if (h<11) return "Guten Morgen";
+  if (h<14) return "Mahlzeit";
+  if (h<18) return "Guten Nachmittag";
+  return "Guten Abend";
+}
+
+function homePlanItems(){
+  // Heutiger Plan: geplante Aufgaben (mit/ohne Uhrzeit), Fällige, Prioritäten
+  const items = [];
+  const active = S.tasks.filter(t=>!t.is_archived && isActiveWeekday(t) && startReached(t));
+  active.forEach(t=>{
+    const done = isCompletedToday(t);
+    if (t.scheduled_date && isToday(t.scheduled_date)){
+      items.push({ t, done, time: t.has_scheduled_time ? fmtTime(new Date(t.scheduled_date)) : null,
+        sort: t.has_scheduled_time ? new Date(t.scheduled_date).getHours()*60+new Date(t.scheduled_date).getMinutes() : 1441 });
+    } else if (!done && taskDueState(t).due){
+      items.push({ t, done:false, time:null, sort: 2000 - (t.is_priority?500:0) - overdueDays(t) });
+    } else if (done){
+      items.push({ t, done:true, time:null, sort: 5000 });
+    }
+  });
+  items.sort((a,b)=>a.sort-b.sort);
+  return items;
+}
+
+async function renderHome(){
+  const el = $("#view-home");
+  if (!el || S.tab!=="home") return;
+
+  // Streak (gleiche Logik wie Statistik)
+  const byDay = {};
+  S.completions.forEach(c=>{ const k=dayKey(new Date(c.completed_at)); byDay[k]=(byDay[k]||0)+1; });
+  let streak=0; const sd=new Date();
+  if (!byDay[dayKey(sd)]) sd.setDate(sd.getDate()-1);
+  while (byDay[dayKey(sd)]){ streak++; sd.setDate(sd.getDate()-1); }
+
+  // Tagesfortschritt
+  const active = S.tasks.filter(t=>!t.is_archived && isActiveWeekday(t) && startReached(t));
+  const dueOrPlanned = active.filter(t=>isCompletedToday(t) || taskDueState(t).due || (t.scheduled_date&&isToday(t.scheduled_date)));
+  const doneN = dueOrPlanned.filter(isCompletedToday).length;
+  const totalN = dueOrPlanned.length;
+  const pct = totalN ? doneN/totalN : 0;
+  const doneMinToday = S.completions.filter(c=>isToday(c.completed_at)).reduce((a,c)=>a+(c.minutes||0),0);
+
+  // Arbeitszeit heute
+  const run = runningEntry();
+  const todayWork = S.workEntries.filter(w=>isToday(w.start_time)).reduce((a,w)=>a+workedMinutes(w),0);
+
+  const dateStr = new Date().toLocaleDateString("de-DE",{weekday:"long",day:"numeric",month:"long"});
+  const r = 32, circ = 2*Math.PI*r;
+
+  const plan = homePlanItems();
+  const openPlan = plan.filter(p=>!p.done), donePlan = plan.filter(p=>p.done);
+
+  const planRow = p => {
+    const t = p.t;
+    const bits = [];
+    bits.push(fmtMin(t.duration_minutes));
+    if (t.location) bits.push("📍 "+esc(t.location));
+    if (!p.done && t.repeat_count>1) bits.push(`${effCompletedToday(t)}/${t.repeat_count}×`);
+    const st = taskDueState(t);
+    if (!p.done && st.label && st.cls) bits.push(`<span class="${st.cls}">${st.label}</span>`);
+    return `<div class="planrow ${p.done?"pdone":""}" data-id="${t.id}">
+      <span class="ptime">${p.time || (p.done?"✓":(t.is_priority?"★":"•"))}</span>
+      <span class="pt">${esc(t.title)}</span>
+      <span class="pm">${bits.join(" · ")}</span></div>`;
+  };
+
+  el.innerHTML = `
+    <div class="hero">
+      <div class="greet">${greetingText()}, Finn! 👋</div>
+      <div class="date">${dateStr}</div>
+      ${streak>0?`<div class="streakline">🔥 ${streak} Tage-Streak – weiter so!</div>`:""}
+    </div>
+
+    <div class="card" id="weatherCard"><div class="section-empty">Wetter lädt…</div></div>
+
+    <div class="homegrid">
+      <div class="card ringwrap" style="margin:0">
+        <div class="ring">
+          <svg width="74" height="74"><circle cx="37" cy="37" r="${r}" fill="none" stroke="var(--line)" stroke-width="7"/>
+          <circle cx="37" cy="37" r="${r}" fill="none" stroke="${pct>=1?"var(--green)":"var(--accent)"}" stroke-width="7"
+            stroke-linecap="round" stroke-dasharray="${circ}" stroke-dashoffset="${circ*(1-pct)}"/></svg>
+          <div class="rv">${totalN?Math.round(pct*100)+"%":"–"}</div>
+        </div>
+        <div><div style="font-weight:800;font-size:17px">${doneN}/${totalN}</div>
+        <div style="font-size:12px;color:var(--dim)">Aufgaben heute<br>${doneMinToday?fmtMin(doneMinToday)+" investiert":""}</div></div>
+      </div>
+      <div class="card" style="margin:0;cursor:pointer" id="homeWork">
+        <div style="font-size:12px;color:var(--dim);font-weight:700;text-transform:uppercase;letter-spacing:.04em">Arbeitszeit</div>
+        <div style="font-size:22px;font-weight:800;margin-top:4px">${run?fmtMin(workedMinutes(run)):(todayWork?fmtMin(todayWork):"–")}</div>
+        <div style="font-size:12px;color:${run?"var(--green)":"var(--dim)"};margin-top:2px">
+          ${run?(run.break_started_at?"⏸ Pause läuft":"🟢 läuft seit "+fmtTime(new Date(run.start_time))):(todayWork?"heute gearbeitet":"nicht eingestempelt")}</div>
+      </div>
+    </div>
+
+    <div class="homehead"><h2>📋 Tagesplan</h2><a id="homeToTasks">Alle Aufgaben ›</a></div>
+    <div class="card">${ openPlan.length ? openPlan.map(planRow).join("")
+      : `<div class="section-empty">${totalN?"Alles erledigt – stark! 🎉":"Heute steht nichts an. Genieß den Tag ☕️"}</div>`}</div>
+    ${donePlan.length?`<div class="card" style="opacity:.65">${donePlan.map(planRow).join("")}</div>`:""}
+  `;
+
+  $("#homeToTasks").onclick = ()=>switchTab("tasks");
+  $("#homeWork").onclick = ()=>switchTab("work");
+  $$(".planrow", el).forEach(row=>{
+    row.onclick = ()=>{ const t=S.tasks.find(x=>x.id===row.dataset.id); if(t) openTaskForm(t); };
+  });
+
+  // Wetter asynchron nachladen
+  const wc = $("#weatherCard");
+  const geo = localStorage.getItem("wopGeo");
+  if (!geo){
+    wc.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+      <div style="font-size:14px;color:var(--dim)">🌤 Wetter anzeigen?</div>
+      <button class="btn small" id="btnGeo">📍 Standort erlauben</button></div>`;
+    $("#btnGeo").onclick = askGeo;
+  } else {
+    const w = await fetchWeather();
+    if (!w || !w.current){ wc.innerHTML = `<div class="section-empty">Wetter gerade nicht verfügbar.</div>`; }
+    else {
+      const [ico,txt] = WMO[w.current.weather_code] || ["🌡","–"];
+      const dmax = Math.round(w.daily.temperature_2m_max[0]), dmin = Math.round(w.daily.temperature_2m_min[0]);
+      const rain = w.daily.precipitation_probability_max[0];
+      const [ico2] = WMO[w.daily.weather_code[1]] || ["–"];
+      wc.innerHTML = `<div class="weather">
+        <div class="wico">${ico}</div>
+        <div><div class="wtemp">${Math.round(w.current.temperature_2m)}°</div><div class="wdesc">${txt}</div></div>
+        <div class="wmeta">H ${dmax}° · T ${dmin}°<br>☔️ ${rain??0}% · 💨 ${Math.round(w.current.wind_speed_10m)} km/h<br>Morgen: ${ico2} ${Math.round(w.daily.temperature_2m_max[1])}°</div>
+      </div>`;
+    }
+  }
 }
