@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0d1017">
+<title>Procrastination Lists</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root{
+  --bg:#0d1017; --bg2:#151a24; --card:#1b2130; --card2:#232b3d;
+  --line:#2a3348; --text:#e8ecf5; --dim:#8b94a8; --dim2:#5c6579;
+  --accent:#6c8cff; --accent2:#8fa6ff; --green:#3ddc84; --red:#ff5d6c;
+  --amber:#ffb454; --purple:#b58cff; --teal:#38d4c3;
+  --radius:16px; --radius-sm:10px;
+  --safe-top:env(safe-area-inset-top,0px); --safe-bottom:env(safe-area-inset-bottom,0px);
+}
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
+  font-size:16px; overscroll-behavior-y:contain;}
+body{padding-bottom:calc(76px + var(--safe-bottom));}
+button{font-family:inherit;}
+input,select,textarea{font-family:inherit;font-size:16px;background:var(--bg2);border:1px solid var(--line);
+  color:var(--text);border-radius:var(--radius-sm);padding:10px 12px;width:100%;outline:none;}
+input:focus,select:focus,textarea:focus{border-color:var(--accent);}
+label{display:block;font-size:12.5px;color:var(--dim);margin:14px 0 5px;font-weight:600;letter-spacing:.02em;}
+h1{font-size:22px;margin:0;}
+h2{font-size:15px;margin:22px 0 10px;color:var(--dim);font-weight:700;text-transform:uppercase;letter-spacing:.06em;}
+
+/* Header */
+.topbar{position:sticky;top:0;z-index:40;background:rgba(13,16,23,.85);backdrop-filter:blur(14px);
+  -webkit-backdrop-filter:blur(14px);padding:calc(10px + var(--safe-top)) 16px 10px;
+  display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);}
+.topbar .sub{font-size:12px;color:var(--dim);}
+.syncdot{width:8px;height:8px;border-radius:50%;background:var(--dim2);display:inline-block;margin-right:5px;}
+.syncdot.ok{background:var(--green);} .syncdot.err{background:var(--red);}
+
+.container{max-width:760px;margin:0 auto;padding:14px 16px;}
+
+/* Tab bar */
+.tabbar{position:fixed;bottom:0;left:0;right:0;z-index:50;display:flex;
+  background:rgba(18,22,32,.92);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  border-top:1px solid var(--line);padding-bottom:var(--safe-bottom);}
+.tabbar button{flex:1;background:none;border:none;color:var(--dim2);padding:10px 0 8px;cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10.5px;font-weight:600;}
+.tabbar button.active{color:var(--accent2);}
+.tabbar .ico{font-size:21px;line-height:1;}
+
+/* Cards & rows */
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:10px;}
+.task{display:flex;gap:12px;align-items:flex-start;background:var(--card);border:1px solid var(--line);
+  border-radius:var(--radius);padding:12px 14px;margin-bottom:8px;transition:opacity .2s;}
+.task.done{opacity:.45;}
+.task .main{flex:1;min-width:0;cursor:pointer;}
+.task .title{font-weight:600;font-size:15.5px;line-height:1.3;word-wrap:break-word;}
+.task .meta{font-size:12px;color:var(--dim);margin-top:3px;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;}
+.task .meta .warn{color:var(--red);font-weight:600;}
+.task .meta .amber{color:var(--amber);}
+.chk{width:27px;height:27px;min-width:27px;border-radius:50%;border:2px solid var(--dim2);background:none;
+  cursor:pointer;margin-top:2px;display:flex;align-items:center;justify-content:center;color:transparent;font-size:15px;}
+.chk.on{background:var(--green);border-color:var(--green);color:#08351d;}
+.chk.partial{border-color:var(--green);color:var(--green);}
+.chk:disabled{opacity:.4;cursor:default;}
+.star{color:var(--amber);}
+.tagpill{display:inline-block;background:var(--card2);border-radius:20px;padding:1px 9px;font-size:11px;color:var(--accent2);}
+.subprog{height:4px;border-radius:2px;background:var(--line);margin-top:8px;overflow:hidden;}
+.subprog>div{height:100%;background:var(--accent);border-radius:2px;}
+.subtasklist{margin-top:8px;border-top:1px solid var(--line);padding-top:6px;}
+.subrow{display:flex;align-items:center;gap:9px;padding:5px 0;font-size:14px;cursor:pointer;}
+.subrow .box{width:18px;height:18px;min-width:18px;border-radius:5px;border:1.5px solid var(--dim2);
+  display:flex;align-items:center;justify-content:center;font-size:11px;color:transparent;}
+.subrow.on .box{background:var(--accent);border-color:var(--accent);color:#fff;}
+.subrow.on span{color:var(--dim);text-decoration:line-through;}
+
+/* Chips */
+.chips{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;scrollbar-width:none;}
+.chips::-webkit-scrollbar{display:none;}
+.chip{flex:none;background:var(--card);border:1px solid var(--line);color:var(--dim);border-radius:20px;
+  padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;}
+.chip.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+.chip .n{opacity:.65;font-weight:500;}
+
+/* Buttons */
+.btn{background:var(--accent);color:#fff;border:none;border-radius:12px;padding:12px 18px;font-size:15px;
+  font-weight:700;cursor:pointer;width:100%;}
+.btn.sec{background:var(--card2);color:var(--text);}
+.btn.danger{background:transparent;color:var(--red);border:1px solid var(--red);}
+.btn.small{width:auto;padding:8px 14px;font-size:13px;border-radius:10px;}
+.btn:disabled{opacity:.5;}
+.fab{position:fixed;right:18px;bottom:calc(86px + var(--safe-bottom));z-index:45;width:56px;height:56px;
+  border-radius:50%;background:var(--accent);color:#fff;border:none;font-size:30px;cursor:pointer;
+  box-shadow:0 6px 20px rgba(108,140,255,.45);display:flex;align-items:center;justify-content:center;padding-bottom:3px;}
+.iconbtn{background:none;border:none;color:var(--dim);font-size:18px;cursor:pointer;padding:4px 8px;}
+
+/* Modal */
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:none;align-items:flex-end;justify-content:center;}
+.modal-bg.open{display:flex;}
+.modal{background:var(--bg2);width:100%;max-width:640px;max-height:88vh;overflow-y:auto;
+  border-radius:22px 22px 0 0;padding:20px 20px calc(24px + var(--safe-bottom));}
+@media(min-width:700px){.modal-bg{align-items:center;}.modal{border-radius:22px;max-height:85vh;}}
+.modal h3{margin:0 0 4px;font-size:19px;}
+.mrow{display:flex;gap:10px;}
+.mrow>div{flex:1;}
+.wkdays{display:flex;gap:6px;margin-top:4px;}
+.wkdays button{flex:1;padding:9px 0;border-radius:9px;border:1px solid var(--line);background:var(--bg2);
+  color:var(--dim);font-size:12.5px;font-weight:700;cursor:pointer;}
+.wkdays button.on{background:var(--accent);border-color:var(--accent);color:#fff;}
+.switch{display:flex;align-items:center;justify-content:space-between;padding:11px 0;}
+.switch label{margin:0;font-size:15px;color:var(--text);font-weight:500;}
+.toggle{position:relative;width:48px;height:28px;min-width:48px;border-radius:14px;background:var(--line);border:none;cursor:pointer;transition:background .15s;}
+.toggle.on{background:var(--green);}
+.toggle::after{content:'';position:absolute;top:2.5px;left:3px;width:23px;height:23px;border-radius:50%;background:#fff;transition:left .15s;}
+.toggle.on::after{left:22px;}
+.sublistedit .row{display:flex;gap:8px;margin-bottom:6px;align-items:center;}
+
+/* Work time */
+.clockcard{text-align:center;padding:22px 16px;}
+.clockcard .big{font-size:42px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:.02em;}
+.clockcard .state{font-size:13px;color:var(--dim);margin-top:2px;}
+.clockbtns{display:flex;gap:10px;margin-top:16px;}
+.clockbtns .btn{flex:1;}
+.wt-entry{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);cursor:pointer;}
+.wt-entry:last-child{border-bottom:none;}
+.wt-entry .t{font-size:14.5px;font-weight:600;font-variant-numeric:tabular-nums;}
+.wt-entry .n{font-size:12px;color:var(--dim);}
+.wt-entry .dur{font-weight:700;font-variant-numeric:tabular-nums;font-size:14.5px;}
+.progressbar{height:10px;border-radius:5px;background:var(--line);overflow:hidden;margin:10px 0 6px;}
+.progressbar>div{height:100%;background:var(--accent);border-radius:5px;transition:width .3s;}
+.progressbar>div.over{background:var(--green);}
+.statgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px;text-align:center;}
+.stat .v{font-size:26px;font-weight:800;}
+.stat .l{font-size:11.5px;color:var(--dim);margin-top:3px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;}
+.barchart{display:flex;align-items:flex-end;gap:5px;height:110px;padding-top:8px;}
+.barchart .bar{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;height:100%;justify-content:flex-end;}
+.barchart .bar>i{width:100%;max-width:26px;background:var(--accent);border-radius:5px 5px 2px 2px;min-height:2px;}
+.barchart .bar.today>i{background:var(--green);}
+.barchart .bar b{font-size:9.5px;color:var(--dim2);font-weight:600;}
+.barchart .bar em{font-size:10px;font-style:normal;color:var(--dim);}
+
+/* Auth / setup */
+.center-screen{min-height:85vh;display:flex;flex-direction:column;justify-content:center;max-width:420px;margin:0 auto;padding:24px;}
+.center-screen h1{font-size:26px;margin-bottom:6px;}
+.center-screen p{color:var(--dim);font-size:14px;line-height:1.5;}
+.msg{font-size:13.5px;margin-top:12px;padding:10px 12px;border-radius:10px;display:none;}
+.msg.err{display:block;background:rgba(255,93,108,.12);color:var(--red);}
+.msg.ok{display:block;background:rgba(61,220,132,.12);color:var(--green);}
+.empty{color:var(--dim2);text-align:center;padding:34px 0;font-size:14px;}
+.section-empty{color:var(--dim2);font-size:13px;padding:4px 2px 12px;}
+code{background:var(--card2);padding:2px 6px;border-radius:6px;font-size:13px;}
+.seg{display:flex;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:3px;margin-bottom:12px;}
+.seg button{flex:1;border:none;background:none;color:var(--dim);padding:8px 0;border-radius:9px;font-weight:700;font-size:13.5px;cursor:pointer;}
+.seg button.active{background:var(--accent);color:#fff;}
+.hidden{display:none!important;}
+</style>
+</head>
+<body>
+
+<!-- ===== Setup-Hinweis (wenn Keys fehlen) ===== -->
+<div id="setupScreen" class="center-screen hidden">
+  <h1>⚙️ Einrichtung nötig</h1>
+  <p>Die App ist noch nicht mit deiner Supabase-Datenbank verbunden.</p>
+  <p>Öffne <code>index.html</code> und trage oben im Skript deine Werte ein:</p>
+  <p><code>SUPABASE_URL</code> und <code>SUPABASE_ANON_KEY</code><br>
+  (findest du in Supabase unter <b>Project Settings → API</b>).</p>
+  <p>Danach die Datei neu laden. Die komplette Anleitung steht in der <b>README</b>.</p>
+</div>
+
+<!-- ===== Login ===== -->
+<div id="authScreen" class="center-screen hidden">
+  <h1>🌀 Procrastination Lists</h1>
+  <p>Melde dich auf jedem Gerät mit derselben E-Mail an – dann sind deine Listen überall synchron.</p>
+  <label>E-Mail</label>
+  <input type="email" id="authEmail" autocomplete="email" placeholder="du@beispiel.de">
+  <label>Passwort</label>
+  <input type="password" id="authPass" autocomplete="current-password" placeholder="Passwort">
+  <div style="height:16px"></div>
+  <button class="btn" id="btnLogin">Anmelden</button>
+  <div style="height:8px"></div>
+  <button class="btn sec" id="btnSignup">Neu registrieren</button>
+  <div class="msg" id="authMsg"></div>
+</div>
+
+<!-- ===== App ===== -->
+<div id="app" class="hidden">
+  <div class="topbar">
+    <div>
+      <h1 id="pageTitle">Aufgaben</h1>
+      <div class="sub"><span class="syncdot" id="syncDot"></span><span id="syncText">verbinde…</span></div>
+    </div>
+    <button class="iconbtn" id="btnSettings" title="Einstellungen">⚙️</button>
+  </div>
+
+  <div class="container">
+    <!-- Tab: Aufgaben -->
+    <div id="view-tasks">
+      <div class="chips" id="locChips"></div>
+      <div class="chips" id="tagChips" style="padding-top:0"></div>
+      <div id="taskSections"></div>
+    </div>
+
+    <!-- Tab: Arbeitszeit -->
+    <div id="view-work" class="hidden"></div>
+
+    <!-- Tab: Statistik -->
+    <div id="view-stats" class="hidden"></div>
+
+    <!-- Tab: Archiv -->
+    <div id="view-archive" class="hidden"></div>
+  </div>
+
+  <button class="fab" id="fab">+</button>
+
+  <div class="tabbar">
+    <button data-tab="tasks" class="active"><span class="ico">☑︎</span>Aufgaben</button>
+    <button data-tab="work"><span class="ico">⏱</span>Arbeitszeit</button>
+    <button data-tab="stats"><span class="ico">📊</span>Statistik</button>
+    <button data-tab="archive"><span class="ico">🗂</span>Archiv</button>
+  </div>
+</div>
+
+<!-- Modals werden per JS gefüllt -->
+<div class="modal-bg" id="modalBg"><div class="modal" id="modalBox"></div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script>
+/* ============================================================
+   KONFIGURATION – HIER DEINE SUPABASE-WERTE EINTRAGEN
+   (Supabase → Project Settings → API)
+   ============================================================ */
+const SUPABASE_URL = "https://chtjcxfzktfaekswqclc.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_NKUmSenxaUvlNlYBmHeV6w_PaofexT2";
+/* ============================================================ */
+</script>
+<script src="app.js"></script>
+</body>
+</html>
