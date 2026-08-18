@@ -1,5 +1,5 @@
 // Minimaler Service Worker: cached die App-Shell, Daten kommen immer live von Supabase.
-const CACHE = "wop-shell-v5";
+const CACHE = "wop-shell-v6";
 const SHELL = ["./", "index.html", "app.js", "manifest.json", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", e => {
@@ -21,4 +21,23 @@ self.addEventListener("fetch", e => {
       return res;
     }).catch(() => caches.match(e.request))
   );
+});
+
+// ---- Push-Benachrichtigungen ----
+self.addEventListener("push", e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (_) {}
+  e.waitUntil(self.registration.showNotification(d.title || "Procrastination Lists", {
+    body: d.body || "",
+    tag: d.tag || "wop",
+    icon: "icon-192.png",
+    badge: "icon-192.png",
+  }));
+});
+self.addEventListener("notificationclick", e => {
+  e.notification.close();
+  e.waitUntil(clients.matchAll({ type: "window", includeUncontrolled: true }).then(list => {
+    for (const c of list) if ("focus" in c) return c.focus();
+    return clients.openWindow("./");
+  }));
 });

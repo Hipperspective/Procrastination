@@ -876,6 +876,8 @@ function openSettings(){
     <div class="card" style="margin-top:4px">${locRows||"<div class='section-empty'>Keine Orte.</div>"}</div>
     <div class="mrow"><input id="s_newloc" placeholder="Neuer Ort…"><button class="btn small sec" id="s_addloc" style="width:auto">+</button></div>
     <div style="height:20px"></div>
+    <label>🔔 Benachrichtigungen</label>
+    <div class="card" style="margin-top:4px" id="s_notifyBox">wird geladen…</div>
     <label>Daten</label>
     <button class="btn sec" id="s_import">📥 iOS-Backup importieren (.json)</button>
     <input type="file" id="s_importfile" accept=".json,application/json" class="hidden">
@@ -889,6 +891,7 @@ function openSettings(){
     <div class="card" style="font-size:13px;color:var(--dim)">Angemeldet als <b style="color:var(--text)">${esc(S.user.email)}</b></div>
     <button class="btn danger" id="s_logout">Abmelden</button>
   `);
+  renderNotifySettings();
   $("#s_import").onclick = ()=>$("#s_importfile").click();
   $("#s_importfile").onchange = async (e)=>{
     const file = e.target.files[0]; if(!file) return;
@@ -1657,4 +1660,118 @@ function openRoutine(name){
     };
   });
   $("#rt_add").onclick = ()=>{ closeModal(); S.locFilter=name; openTaskForm(null); };
+}
+
+// ============================================================
+// 🔔 Push-Benachrichtigungen (Web Push)
+// ============================================================
+const VAPID_PUBLIC_KEY = "BHWmrGuXg9qtBkjJiNrtvx03b70TiZwDlAJIyCItZH8rBfOJAJA7M64stnC3wxe-kHOHrCpRUcdqWw4qadE-rdY";
+
+function b64ToU8(base64){
+  const pad = "=".repeat((4 - base64.length % 4) % 4);
+  const b = (base64 + pad).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(b); const arr = new Uint8Array(raw.length);
+  for (let i=0;i<raw.length;i++) arr[i]=raw.charCodeAt(i);
+  return arr;
+}
+
+async function pushStatus(){
+  try {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return "unsupported";
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg) return "off";
+    const sub = await reg.pushManager.getSubscription();
+    return sub ? "on" : "off";
+  } catch(e){ return "unsupported"; }
+}
+
+async function enablePush(){
+  try {
+    if (!("PushManager" in window)){
+      const isiOS = /iphone|ipad/i.test(navigator.userAgent);
+      toast(isiOS ? "Am iPhone/iPad zuerst die App zum Home-Bildschirm hinzufügen und von dort öffnen." : "Dieser Browser unterstützt keine Push-Nachrichten.", true);
+      return;
+    }
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted"){ toast("Benachrichtigungen wurden nicht erlaubt.", true); return; }
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: b64ToU8(VAPID_PUBLIC_KEY),
+    });
+    const j = sub.toJSON();
+    const { error } = await sb.from("push_subscriptions").upsert(
+      { endpoint: sub.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
+        device: navigator.userAgent.slice(0,120) }, { onConflict: "endpoint" });
+    if (error) throw error;
+    toast("🔔 Benachrichtigungen auf diesem Gerät aktiv!");
+  } catch(e){ toast("Aktivierung fehlgeschlagen: "+(e.message||e), true); }
+  renderNotifySettings();
+}
+
+async function disablePush(){
+  const reg = await navigator.serviceWorker.getRegistration();
+  const sub = reg && await reg.pushManager.getSubscription();
+  if (sub){
+    await sb.from("push_subscriptions").delete().eq("endpoint", sub.endpoint);
+    await sub.unsubscribe();
+  }
+  toast("Benachrichtigungen auf diesem Gerät aus.");
+  renderNotifySettings();
+}
+
+async function renderNotifySettings(){
+  const box = $("#s_notifyBox"); if (!box) return;
+  const status = await pushStatus();
+  const digestOn = getSetting("notifyDigestEnabled", false);
+  const digestMin = getSetting("notifyDigestMin", 480);
+  const alarmsOn = getSetting("notifyBlockAlarms", true);
+  const lead = getSetting("notifyBlockLead", 30);
+  const hmv = m => `${pad(Math.floor(m/60))}:${pad(m%60)}`;
+  const routines = S.locations.filter(l=>l.is_routine);
+
+  box.innerHTML = `
+    ${ status==="unsupported" ? `<div class="section-empty">Auf iPhone/iPad: App zuerst über Teilen → „Zum Home-Bildschirm" installieren und von dort öffnen – dann geht's.</div>` : `
+    <div class="switch"><label>${status==="on"?"✅ Aktiv auf diesem Gerät":"Auf diesem Gerät aktivieren"}</label>
+      <button class="toggle ${status==="on"?"on":""}" id="n_toggle"></button></div>` }
+    <div class="switch"><label>📋 Tages-Überblick (fällige Aufgaben)</label>
+      <button class="toggle ${digestOn?"on":""}" id="n_digest"></button></div>
+    <div class="mrow" ${digestOn?"":'style="display:none"'} id="n_digestrow">
+      <div><label>Uhrzeit</label><input type="time" id="n_digesttime" value="${hmv(digestMin)}"></div><div></div>
+    </div>
+    <div class="switch"><label>📌 Termin-Alarme (Termine & Fahrten)</label>
+      <button class="toggle ${alarmsOn?"on":""}" id="n_alarms"></button></div>
+    <div class="mrow" ${alarmsOn?"":'style="display:none"'} id="n_leadrow">
+      <div><label>Vorlauf (Minuten)</label><input type="number" min="0" id="n_lead" value="${lead}"></div><div></div>
+    </div>
+    ${ routines.length ? `<label style="margin-top:14px">Routine-Erinnerungen</label>` + routines.map(l=>`
+      <div class="switch" data-loc="${l.id}">
+        <label>${routineMeta(l.name).ico} ${esc(l.name)}</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="time" class="n_rtime" data-loc="${l.id}" value="${hmv(l.routine_notify_min??420)}" style="width:auto" ${l.routine_notify_enabled?"":"disabled"}>
+          <button class="toggle n_rtoggle ${l.routine_notify_enabled?"on":""}" data-loc="${l.id}"></button>
+        </div>
+      </div>`).join("") : "" }
+  `;
+
+  const hmToMin = v => { const [h,m]=v.split(":").map(Number); return h*60+(m||0); };
+  const nt = $("#n_toggle");
+  if (nt) nt.onclick = ()=> nt.classList.contains("on") ? disablePush() : enablePush();
+  $("#n_digest").onclick = async e=>{
+    await saveSetting("notifyDigestEnabled", !digestOn); renderNotifySettings();
+  };
+  const dt = $("#n_digesttime");
+  if (dt) dt.onchange = ()=>saveSetting("notifyDigestMin", hmToMin(dt.value));
+  $("#n_alarms").onclick = async ()=>{ await saveSetting("notifyBlockAlarms", !alarmsOn); renderNotifySettings(); };
+  const ld = $("#n_lead");
+  if (ld) ld.onchange = ()=>saveSetting("notifyBlockLead", Math.max(0,+ld.value||30));
+  $$(".n_rtoggle").forEach(b=>b.onclick = async ()=>{
+    const l = S.locations.find(x=>x.id===b.dataset.loc);
+    await sb.from("locations").update({ routine_notify_enabled: !l.routine_notify_enabled }).eq("id", l.id);
+    await loadAll(); renderNotifySettings();
+  });
+  $$(".n_rtime").forEach(inp=>inp.onchange = async ()=>{
+    await sb.from("locations").update({ routine_notify_min: hmToMin(inp.value) }).eq("id", inp.dataset.loc);
+    loadAll();
+  });
 }
