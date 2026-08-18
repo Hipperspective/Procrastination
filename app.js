@@ -42,7 +42,7 @@ const isToday = d => d && sameDay(new Date(d), new Date());
 const sameDay = (a,b) => a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
 const startOfDay = d => { const x=new Date(d); x.setHours(0,0,0,0); return x; };
 const dayKey = d => { const x=new Date(d); return `${x.getFullYear()}-${pad(x.getMonth()+1)}-${pad(x.getDate())}`; };
-const daysBetween = (a,b) => Math.floor((startOfDay(b)-startOfDay(a))/86400000);
+const daysBetween = (a,b) => Math.round((startOfDay(b)-startOfDay(a))/86400000); // round: DST-sicher
 const esc = s => String(s??"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random());
 
@@ -106,7 +106,7 @@ async function loadAll(){
     sb.from("tasks").select("*").order("sort_order").order("created_at"),
     sb.from("locations").select("*").order("sort_order").order("created_at"),
     sb.from("completions").select("*").gte("completed_at", since).order("completed_at",{ascending:false}),
-    sb.from("work_entries").select("*").order("start_time",{ascending:false}).limit(500),
+    sb.from("work_entries").select("*").order("start_time",{ascending:false}).limit(2000),
     sb.from("settings").select("*"),
     sb.from("time_blocks").select("*").order("start_min").limit(2000),
   ]);
@@ -215,46 +215,63 @@ function taskDueState(t){
 }
 
 // Eine Wiederholung erledigen
+const _completing = new Set(); // verhindert Doppel-Tipp
 async function completeTask(t){
-  const now = new Date().toISOString();
-  let count = effCompletedToday(t) + 1;
-  const upd = {
-    completed_today_count: count,
-    last_completed_count_reset: now,
-    last_repeat_completed_at: now,
-  };
-  let fullyDone = count >= t.repeat_count;
-  if (fullyDone){
-    upd.last_done_at = now;
-    if (t.kind==="oneOff") upd.is_archived = true;
-  }
-  // Optimistisch lokal
-  Object.assign(t, upd);
-  renderAll();
-  const { error } = await sb.from("tasks").update(upd).eq("id", t.id);
-  if (error){ toast("Speichern fehlgeschlagen: "+error.message, true); return; }
-  await sb.from("completions").insert({ task_id:t.id, title:t.title, minutes:t.duration_minutes });
-  // Arbeitszeit automatisch buchen, wenn der Ort ein Arbeitsort ist
-  const loc = S.locations.find(l => l.name.toLowerCase() === (t.location||"").toLowerCase());
-  if (loc && loc.is_work_location){
-    const end = new Date();
-    const start = new Date(end - Math.max(1,t.duration_minutes)*60000);
-    await sb.from("work_entries").insert({ start_time:start.toISOString(), end_time:end.toISOString(), notes:"Task: "+t.title });
-    toast(`✓ Erledigt – ${fmtMin(t.duration_minutes)} Arbeitszeit gebucht`);
-  } else {
-    toast(fullyDone ? "✓ Erledigt!" : `✓ ${count}/${t.repeat_count} geschafft`);
-  }
-  loadAll();
+  if (_completing.has(t.id)) return;
+  _completing.add(t.id);
+  try {
+    const now = new Date().toISOString();
+    let count = effCompletedToday(t) + 1;
+    const upd = {
+      completed_today_count: count,
+      last_completed_count_reset: now,
+      last_repeat_completed_at: now,
+    };
+    let fullyDone = count >= t.repeat_count;
+    if (fullyDone){
+      upd.last_done_at = now;
+      if (t.kind==="oneOff") upd.is_archived = true;
+    }
+    // Optimistisch lokal – mit Snapshot für Rollback
+    const snapshot = {};
+    Object.keys(upd).forEach(k=>snapshot[k]=t[k]);
+    Object.assign(t, upd);
+    renderAll();
+    const { error } = await sb.from("tasks").update(upd).eq("id", t.id);
+    if (error){
+      Object.assign(t, snapshot); renderAll();
+      toast("Speichern fehlgeschlagen (offline?): "+error.message, true);
+      return;
+    }
+    const { error: cErr } = await sb.from("completions").insert({ task_id:t.id, title:t.title, minutes:t.duration_minutes });
+    if (cErr) toast("Statistik nicht gespeichert: "+cErr.message, true);
+    // Arbeitszeit automatisch buchen – aber nur, wenn die Stempeluhr NICHT läuft (sonst doppelt)
+    const loc = S.locations.find(l => l.name.toLowerCase() === (t.location||"").toLowerCase());
+    if (loc && loc.is_work_location && !runningEntry()){
+      const end = new Date();
+      const start = new Date(end - Math.max(1,t.duration_minutes)*60000);
+      const { error: wErr } = await sb.from("work_entries").insert({ start_time:start.toISOString(), end_time:end.toISOString(), notes:"Task: "+t.title });
+      toast(wErr ? "Arbeitszeit nicht gebucht: "+wErr.message : `✓ Erledigt – ${fmtMin(t.duration_minutes)} Arbeitszeit gebucht`, !!wErr);
+    } else {
+      toast(fullyDone ? "✓ Erledigt!" : `✓ ${count}/${t.repeat_count} geschafft`);
+    }
+    loadAll();
+  } finally { _completing.delete(t.id); }
 }
 
 async function uncompleteToday(t){
-  const upd = { completed_today_count:0, last_repeat_completed_at:null, last_done_at:null,
+  const todayStart = startOfDay(new Date()).toISOString();
+  // heutige Completions entfernen, dann last_done_at auf die letzte FRÜHERE Erledigung zurücksetzen
+  await sb.from("completions").delete().eq("task_id", t.id).gte("completed_at", todayStart);
+  const { data: prev } = await sb.from("completions").select("completed_at")
+    .eq("task_id", t.id).lt("completed_at", todayStart)
+    .order("completed_at",{ascending:false}).limit(1);
+  const upd = { completed_today_count:0, last_repeat_completed_at:null,
+    last_done_at: (prev && prev[0]) ? prev[0].completed_at : null,
     last_completed_count_reset:new Date().toISOString(), is_archived:false };
   Object.assign(t, upd); renderAll();
-  await sb.from("tasks").update(upd).eq("id", t.id);
-  // letzte heutige Completion(s) dieses Tasks entfernen
-  const todayStart = startOfDay(new Date()).toISOString();
-  await sb.from("completions").delete().eq("task_id", t.id).gte("completed_at", todayStart);
+  const { error } = await sb.from("tasks").update(upd).eq("id", t.id);
+  if (error) toast("Zurücknehmen fehlgeschlagen: "+error.message, true);
   loadAll();
 }
 
@@ -721,21 +738,28 @@ function renderWork(){
     $("#w_break").onclick = async ()=>{
       if (run.break_started_at){
         const add = Math.max(0, Math.round((Date.now()-new Date(run.break_started_at))/60000));
-        await sb.from("work_entries").update({ break_minutes:(run.break_minutes||0)+add, break_started_at:null }).eq("id",run.id);
+        await sb.from("work_entries").update({ break_minutes:(run.break_minutes||0)+add, break_started_at:null })
+          .eq("id",run.id).is("end_time", null);
       } else {
-        await sb.from("work_entries").update({ break_started_at:new Date().toISOString() }).eq("id",run.id);
+        await sb.from("work_entries").update({ break_started_at:new Date().toISOString() })
+          .eq("id",run.id).is("end_time", null);
       }
       loadAll();
     };
     $("#w_out").onclick = async ()=>{
       let brk = run.break_minutes||0;
       if (run.break_started_at) brk += Math.max(0, Math.round((Date.now()-new Date(run.break_started_at))/60000));
-      await sb.from("work_entries").update({ end_time:new Date().toISOString(), break_minutes:brk, break_started_at:null }).eq("id",run.id);
-      toast("Ausgestempelt ✓"); loadAll();
+      const { data: closed } = await sb.from("work_entries").update({ end_time:new Date().toISOString(), break_minutes:brk, break_started_at:null })
+        .eq("id",run.id).is("end_time", null).select("id");
+      toast(closed && closed.length ? "Ausgestempelt ✓" : "War schon ausgestempelt (anderes Gerät)"); loadAll();
     };
   } else {
     $("#w_in").onclick = async ()=>{
-      await sb.from("work_entries").insert({ start_time:new Date().toISOString() });
+      // Doppel-Einstempeln verhindern (anderes Gerät könnte schon laufen)
+      const { data: open } = await sb.from("work_entries").select("id").is("end_time", null).limit(1);
+      if (open && open.length){ toast("Es läuft schon eine Stempelung (anderes Gerät?)"); loadAll(); return; }
+      const { error } = await sb.from("work_entries").insert({ start_time:new Date().toISOString() });
+      if (error) return toast("Einstempeln fehlgeschlagen: "+error.message, true);
       toast("Eingestempelt – viel Erfolg!"); loadAll();
     };
   }
@@ -839,7 +863,7 @@ function renderStats(){
     <div class="statgrid">
       <div class="stat"><div class="v">🔥 ${streak}</div><div class="l">Tage-Streak</div></div>
       <div class="stat"><div class="v">${todayS.n}</div><div class="l">Heute erledigt</div></div>
-      <div class="stat"><div class="v">${weekN}</div><div class="l">Diese Woche</div></div>
+      <div class="stat"><div class="v">${weekN}</div><div class="l">Letzte 7 Tage</div></div>
       <div class="stat"><div class="v">${fmtMin(weekMin)}</div><div class="l">Zeit · 7 Tage</div></div>
     </div>
     <h2>Letzte 14 Tage</h2>
@@ -989,8 +1013,11 @@ function mapBackup(json){
     if (!ds.date) return;
     const dk = dayKey(new Date(ds.date));
     (ds.timeBlocks||[]).forEach(tb=>{
+      const bType = typeMap[tb.typeRaw]||"event";
+      let bEnd = tb.endTime||0;
+      if (bEnd <= (tb.startTime||0) && bType!=="sleep") bEnd = 1439; // Über-Mitternacht normalisieren
       time_blocks.push({ id: lc(tb.id), date: dk, title: tb.title||"",
-        type: typeMap[tb.typeRaw]||"event", start_min: tb.startTime||0, end_min: tb.endTime||0,
+        type: bType, start_min: tb.startTime||0, end_min: bEnd,
         notes: tb.notes||"", color: tb.customColorRaw||"" });
     });
   });
@@ -1113,7 +1140,8 @@ function homeBlockRows(){
   const nowM = new Date().getHours()*60+new Date().getMinutes();
   return blocks.map(b=>{
     const t = BLOCK_TYPES[b.type]||BLOCK_TYPES.event;
-    const past = b.end_min < nowM;
+    const endEff = b.end_min > b.start_min ? b.end_min : 1440;
+    const past = endEff < nowM;
     return `<div class="planrow ${past?"pdone":""}" data-block="${b.id}">
       <span class="ptime">${minToHM(b.start_min)}</span>
       <span class="pt">${t.ico} ${esc(b.title||t.label)}</span>
