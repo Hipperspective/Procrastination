@@ -170,6 +170,48 @@ h2{font-size:15px;margin:22px 0 10px;color:var(--dim);font-weight:700;text-trans
 .homehead h2{margin:0;}
 .homehead a{font-size:12.5px;color:var(--accent2);text-decoration:none;font-weight:700;cursor:pointer;}
 
+/* Plan / Kalender */
+.weekstrip{display:flex;gap:5px;margin-bottom:12px;}
+.weekstrip button{flex:1;border:1px solid var(--line);background:var(--card);border-radius:12px;
+  padding:8px 0 7px;cursor:pointer;color:var(--dim);display:flex;flex-direction:column;align-items:center;gap:1px;}
+.weekstrip button b{font-size:15px;color:var(--text);}
+.weekstrip button.sel{background:var(--accent);border-color:var(--accent);}
+.weekstrip button.sel b,.weekstrip button.sel span{color:#fff;}
+.weekstrip button span{font-size:10px;font-weight:700;text-transform:uppercase;}
+.weekstrip button .dots{height:5px;display:flex;gap:2px;}
+.weekstrip button .dots i{width:4px;height:4px;border-radius:50%;}
+.plannav{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.plannav b{font-size:15px;text-transform:capitalize;}
+.timeline{position:relative;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  overflow:hidden;}
+.tl-hour{position:absolute;left:0;right:0;border-top:1px solid rgba(42,51,72,.55);}
+.tl-hour span{position:absolute;top:-8px;left:6px;font-size:9.5px;color:var(--dim2);background:var(--card);padding:0 3px;}
+.tl-block{position:absolute;left:52px;right:8px;border-radius:9px;padding:4px 9px;overflow:hidden;
+  cursor:pointer;border-left:4px solid;font-size:12.5px;}
+.tl-block b{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.tl-block span{font-size:10.5px;opacity:.8;}
+.tl-now{position:absolute;left:0;right:0;border-top:2px solid var(--red);z-index:5;}
+.tl-now::before{content:'';position:absolute;left:44px;top:-5px;width:8px;height:8px;border-radius:50%;background:var(--red);}
+
+/* Chat */
+.chatwrap{display:flex;flex-direction:column;height:74vh;}
+.chatlog{flex:1;overflow-y:auto;padding:4px 2px;display:flex;flex-direction:column;gap:10px;}
+.cmsg{max-width:86%;padding:10px 13px;border-radius:16px;font-size:14.5px;line-height:1.45;white-space:pre-wrap;word-wrap:break-word;}
+.cmsg.user{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:5px;}
+.cmsg.bot{align-self:flex-start;background:var(--card2);border-bottom-left-radius:5px;}
+.cmsg.sys{align-self:center;background:none;color:var(--dim2);font-size:12px;padding:2px;}
+.cmsg.act{align-self:flex-start;background:rgba(61,220,132,.12);color:var(--green);font-size:12.5px;padding:6px 11px;}
+.chatinput{display:flex;gap:8px;margin-top:10px;}
+.chatinput input{flex:1;}
+.chatinput button{width:46px;min-width:46px;border-radius:12px;border:none;background:var(--accent);color:#fff;font-size:18px;cursor:pointer;}
+.typing{align-self:flex-start;color:var(--dim);font-size:13px;padding:4px 8px;}
+
+/* Kategorien-Header */
+.locsec{display:flex;align-items:center;gap:8px;margin:20px 0 8px;}
+.locsec .dot{width:10px;height:10px;border-radius:3px;}
+.locsec h2{margin:0;}
+.locsec .cnt{font-size:12px;color:var(--dim2);font-weight:700;}
+
 /* Auth / setup */
 .center-screen{min-height:85vh;display:flex;flex-direction:column;justify-content:center;max-width:420px;margin:0 auto;padding:24px;}
 .center-screen h1{font-size:26px;margin-bottom:6px;}
@@ -220,7 +262,10 @@ code{background:var(--card2);padding:2px 6px;border-radius:6px;font-size:13px;}
       <h1 id="pageTitle">Heute</h1>
       <div class="sub"><span class="syncdot" id="syncDot"></span><span id="syncText">verbinde…</span></div>
     </div>
-    <button class="iconbtn" id="btnSettings" title="Einstellungen">⚙️</button>
+    <div>
+      <button class="iconbtn" id="btnChat" title="Assistent" style="font-size:20px">💬</button>
+      <button class="iconbtn" id="btnSettings" title="Einstellungen">⚙️</button>
+    </div>
   </div>
 
   <div class="container">
@@ -233,6 +278,9 @@ code{background:var(--card2);padding:2px 6px;border-radius:6px;font-size:13px;}
       <div class="chips" id="tagChips" style="padding-top:0"></div>
       <div id="taskSections"></div>
     </div>
+
+    <!-- Tab: Plan (Kalender) -->
+    <div id="view-plan" class="hidden"></div>
 
     <!-- Tab: Arbeitszeit -->
     <div id="view-work" class="hidden"></div>
@@ -249,9 +297,9 @@ code{background:var(--card2);padding:2px 6px;border-radius:6px;font-size:13px;}
   <div class="tabbar">
     <button data-tab="home" class="active"><span class="ico">☀️</span>Heute</button>
     <button data-tab="tasks"><span class="ico">☑︎</span>Aufgaben</button>
+    <button data-tab="plan"><span class="ico">📅</span>Plan</button>
     <button data-tab="work"><span class="ico">⏱</span>Zeit</button>
     <button data-tab="stats"><span class="ico">📊</span>Statistik</button>
-    <button data-tab="archive"><span class="ico">🗂</span>Archiv</button>
   </div>
 </div>
 

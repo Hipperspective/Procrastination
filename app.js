@@ -16,7 +16,8 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 // ---------- State ----------
 const S = {
   user: null,
-  tasks: [], locations: [], completions: [], workEntries: [], settings: {},
+  tasks: [], locations: [], completions: [], workEntries: [], settings: {}, timeBlocks: [],
+  planDate: null, chat: [], chatBusy: false,
   locFilter: "ALLE", tagFilter: null, tab: "home",
   expanded: new Set(),   // task ids with open subtasks
   tickTimer: null,
@@ -101,16 +102,19 @@ function übersetzeAuthFehler(m){
 async function loadAll(){
   setSync("", "lade…");
   const since = new Date(Date.now() - 400*86400000).toISOString(); // Completions: letzte ~13 Monate
-  const [t, l, c, w, st] = await Promise.all([
+  const [t, l, c, w, st, tb] = await Promise.all([
     sb.from("tasks").select("*").order("sort_order").order("created_at"),
     sb.from("locations").select("*").order("sort_order").order("created_at"),
     sb.from("completions").select("*").gte("completed_at", since).order("completed_at",{ascending:false}),
     sb.from("work_entries").select("*").order("start_time",{ascending:false}).limit(500),
     sb.from("settings").select("*"),
+    sb.from("time_blocks").select("*").order("start_min").limit(2000),
   ]);
   const err = t.error||l.error||c.error||w.error||st.error;
   if (err){ setSync("err","Fehler: "+err.message); toast("Laden fehlgeschlagen: "+err.message, true); return; }
   S.tasks=t.data; S.locations=l.data; S.completions=c.data; S.workEntries=w.data;
+  S.timeBlocks = tb.error ? [] : tb.data;  // Tabelle fehlt evtl. noch (SQL-Update)
+  if (tb.error && !S._tbWarned){ S._tbWarned=true; toast("Kalender: bitte update-kalender.sql in Supabase ausführen", true); }
   S.settings = Object.fromEntries(st.data.map(r=>[r.key, r.value]));
 
   if (S.locations.length===0){
@@ -363,7 +367,20 @@ function renderTasks(){
   let html = "";
   const section = (title, arr) => arr.length ? `<h2>${title}</h2>` + arr.map(taskRow).join("") : "";
   html += section("🔥 Jetzt fällig", dueNow);
-  html += section("Offen", openRest);
+  if (S.locFilter==="ALLE"){
+    // Nach Ort/Kategorie gruppieren (Reihenfolge wie in den Einstellungen)
+    const palette = ["#6c8cff","#3ddc84","#ff9f43","#b58cff","#38d4c3","#ffd54f","#f48fb1","#ff5d6c","#7986cb","#a1887f"];
+    const locSection = (name, color, arr) => arr.length ? `
+      <div class="locsec"><span class="dot" style="background:${color}"></span>
+      <h2>${esc(name)}</h2><span class="cnt">${arr.length}</span></div>` + arr.map(taskRow).join("") : "";
+    S.locations.forEach((l,i)=>{
+      html += locSection(l.name, palette[i%palette.length], openRest.filter(t=>(t.location||"")===l.name));
+    });
+    const noLoc = openRest.filter(t=>!S.locations.some(l=>l.name===(t.location||"")));
+    html += locSection("Sonstiges", "#5c6579", noLoc);
+  } else {
+    html += section("Offen", openRest);
+  }
   html += section("Nicht heute", inactive);
   html += section("Heute erledigt", doneToday);
   el.innerHTML = html;
@@ -423,14 +440,15 @@ $("#modalBg").addEventListener("click", e=>{ if(e.target.id==="modalBg") closeMo
 function switchTab(tab){
   S.tab = tab;
   $$(".tabbar button").forEach(b=>b.classList.toggle("active", b.dataset.tab===tab));
-  ["home","tasks","work","stats","archive"].forEach(v=>$("#view-"+v).classList.toggle("hidden", v!==tab));
-  $("#pageTitle").textContent = {home:"Heute",tasks:"Aufgaben",work:"Arbeitszeit",stats:"Statistik",archive:"Archiv"}[tab];
+  ["home","tasks","plan","work","stats","archive"].forEach(v=>$("#view-"+v).classList.toggle("hidden", v!==tab));
+  $("#pageTitle").textContent = {home:"Heute",tasks:"Aufgaben",plan:"Plan",work:"Arbeitszeit",stats:"Statistik",archive:"Archiv"}[tab];
   $("#fab").classList.toggle("hidden", tab==="stats" || tab==="archive");
   renderAll();
 }
 
 function renderAll(){
   if (S.tab==="home") renderHome();
+  if (S.tab==="plan") renderPlan();
   if (S.tab==="tasks") renderTasks();
   if (S.tab==="work") renderWork();
   if (S.tab==="stats") renderStats();
@@ -441,7 +459,8 @@ function startApp(){
   $("#authScreen").classList.add("hidden");
   $("#app").classList.remove("hidden");
   $$(".tabbar button").forEach(b => b.onclick = ()=>switchTab(b.dataset.tab));
-  $("#fab").onclick = ()=>{ S.tab==="work" ? openWorkEntryForm(null) : openTaskForm(null); };
+  $("#fab").onclick = ()=>{ if(S.tab==="work") openWorkEntryForm(null); else if(S.tab==="plan") openBlockForm(null); else openTaskForm(null); };
+  $("#btnChat").onclick = openChat;
   $("#btnSettings").onclick = openSettings;
   initRealtime();
   loadAll();
@@ -859,6 +878,12 @@ function openSettings(){
     <label>Daten</label>
     <button class="btn sec" id="s_import">📥 iOS-Backup importieren (.json)</button>
     <input type="file" id="s_importfile" accept=".json,application/json" class="hidden">
+    <div style="height:8px"></div>
+    <button class="btn sec" id="s_archive">🗂 Archiv öffnen</button>
+    <label>💬 Assistent – OpenAI API-Key (bleibt nur auf diesem Gerät)</label>
+    <input type="password" id="s_aikey" placeholder="sk-…" value="${esc(localStorage.getItem("wopAiKey")||"")}">
+    <div style="height:8px"></div>
+    <button class="btn sec" id="s_savekey">Key speichern</button>
     <div style="height:20px"></div>
     <div class="card" style="font-size:13px;color:var(--dim)">Angemeldet als <b style="color:var(--text)">${esc(S.user.email)}</b></div>
     <button class="btn danger" id="s_logout">Abmelden</button>
@@ -889,6 +914,12 @@ function openSettings(){
     await loadAll(); openSettings();
   };
   $("#s_logout").onclick = async ()=>{ await sb.auth.signOut(); };
+  $("#s_archive").onclick = ()=>{ closeModal(); switchTab("archive"); };
+  $("#s_savekey").onclick = ()=>{
+    const v = $("#s_aikey").value.trim();
+    if (v) localStorage.setItem("wopAiKey", v); else localStorage.removeItem("wopAiKey");
+    toast(v ? "Key gespeichert ✓" : "Key entfernt");
+  };
 }
 
 // ============================================================
@@ -944,13 +975,25 @@ function mapBackup(json){
     notes: w.notes || "",
   })).filter(w=>w.start_time);
 
+  const typeMap = { "Work":"work","Home":"home","Travel":"travel","Event":"event","Routine":"routine","Free Time":"free","Sleep":"sleep" };
+  const time_blocks = [];
+  (json.daySchedules||[]).forEach(ds=>{
+    if (!ds.date) return;
+    const dk = dayKey(new Date(ds.date));
+    (ds.timeBlocks||[]).forEach(tb=>{
+      time_blocks.push({ id: lc(tb.id), date: dk, title: tb.title||"",
+        type: typeMap[tb.typeRaw]||"event", start_min: tb.startTime||0, end_min: tb.endTime||0,
+        notes: tb.notes||"", color: tb.customColorRaw||"" });
+    });
+  });
+
   const settings = [];
   const s = json.settings||{};
   if (s.workTimeTargetMode) settings.push({ key:"workTargetMode", value:s.workTimeTargetMode });
   if (s.weeklyTargetWorkMinutes) settings.push({ key:"weeklyTargetMinutes", value:s.weeklyTargetWorkMinutes });
   if (s.monthlyTargetWorkMinutes) settings.push({ key:"monthlyTargetMinutes", value:s.monthlyTargetWorkMinutes });
 
-  return { locations, tasks, work_entries, settings };
+  return { locations, tasks, work_entries, settings, time_blocks };
 }
 
 async function importBackup(json){
@@ -968,6 +1011,8 @@ async function importBackup(json){
     results.push(await sb.from("tasks").upsert(m.tasks, { onConflict:"id", ignoreDuplicates:true }));
   if (m.work_entries.length)
     results.push(await sb.from("work_entries").upsert(m.work_entries, { onConflict:"id", ignoreDuplicates:true }));
+  if (m.time_blocks.length)
+    results.push(await sb.from("time_blocks").upsert(m.time_blocks, { onConflict:"id", ignoreDuplicates:true }));
   for (const st of m.settings)
     results.push(await sb.from("settings").upsert({ user_id:S.user.id, key:st.key, value:st.value }));
 
@@ -975,7 +1020,7 @@ async function importBackup(json){
   if (err) { toast("Import-Fehler: "+err.error.message, true); return; }
 
   closeModal();
-  toast(`✓ Import fertig: ${m.tasks.length} Aufgaben, ${newLocs.length} neue Orte, ${m.work_entries.length} Arbeitszeiten`);
+  toast(`✓ Import fertig: ${m.tasks.length} Aufgaben, ${newLocs.length} neue Orte, ${m.work_entries.length} Arbeitszeiten, ${m.time_blocks.length} Kalender-Blöcke`);
   loadAll();
 }
 
@@ -1053,6 +1098,19 @@ function greetingText(){
   if (h<14) return "Mahlzeit";
   if (h<18) return "Guten Nachmittag";
   return "Guten Abend";
+}
+
+function homeBlockRows(){
+  const blocks = blocksFor(dayKey(new Date())).filter(b=>b.type!=="sleep");
+  const nowM = new Date().getHours()*60+new Date().getMinutes();
+  return blocks.map(b=>{
+    const t = BLOCK_TYPES[b.type]||BLOCK_TYPES.event;
+    const past = b.end_min < nowM;
+    return `<div class="planrow ${past?"pdone":""}" data-block="${b.id}">
+      <span class="ptime">${minToHM(b.start_min)}</span>
+      <span class="pt">${t.ico} ${esc(b.title||t.label)}</span>
+      <span class="pm">bis ${minToHM(b.end_min)}</span></div>`;
+  }).join("");
 }
 
 function homePlanItems(){
@@ -1145,15 +1203,21 @@ async function renderHome(){
       </div>
     </div>
 
-    <div class="homehead"><h2>📋 Tagesplan</h2><a id="homeToTasks">Alle Aufgaben ›</a></div>
+    ${ homeBlockRows() ? `<div class="homehead"><h2>📅 Termine heute</h2><a id="homeToPlan">Zum Plan ›</a></div>
+    <div class="card">${homeBlockRows()}</div>` : "" }
+    <div class="homehead"><h2>📋 Aufgaben</h2><a id="homeToTasks">Alle Aufgaben ›</a></div>
     <div class="card">${ openPlan.length ? openPlan.map(planRow).join("")
       : `<div class="section-empty">${totalN?"Alles erledigt – stark! 🎉":"Heute steht nichts an. Genieß den Tag ☕️"}</div>`}</div>
     ${donePlan.length?`<div class="card" style="opacity:.65">${donePlan.map(planRow).join("")}</div>`:""}
   `;
 
   $("#homeToTasks").onclick = ()=>switchTab("tasks");
+  const hp = $("#homeToPlan"); if (hp) hp.onclick = ()=>{ S.planDate=dayKey(new Date()); switchTab("plan"); };
+  $$("[data-block]", el).forEach(row=>row.onclick=()=>{
+    const b=S.timeBlocks.find(x=>x.id===row.dataset.block); if(b) openBlockForm(b);
+  });
   $("#homeWork").onclick = ()=>switchTab("work");
-  $$(".planrow", el).forEach(row=>{
+  $$(".planrow[data-id]", el).forEach(row=>{
     row.onclick = ()=>{ const t=S.tasks.find(x=>x.id===row.dataset.id); if(t) openTaskForm(t); };
   });
 
@@ -1186,4 +1250,323 @@ async function renderHome(){
       $("#wChange").onclick = openCityPicker;
     }
   }
+}
+
+// ============================================================
+// Plan (Kalender mit Zeitblöcken – wie in der iOS-App)
+// ============================================================
+const BLOCK_TYPES = {
+  work:   { label:"Arbeit",  ico:"💼", color:"#5b8def" },
+  home:   { label:"Zuhause", ico:"🏠", color:"#3ddc84" },
+  travel: { label:"Fahrt",   ico:"🚗", color:"#ff9f43" },
+  event:  { label:"Termin",  ico:"📌", color:"#b58cff" },
+  routine:{ label:"Routine", ico:"🔁", color:"#38d4c3" },
+  free:   { label:"Freizeit",ico:"✨", color:"#ffd54f" },
+  sleep:  { label:"Schlaf",  ico:"🌙", color:"#7986cb" },
+};
+const BLOCK_PALETTE = { red:"#ff5d6c", orange:"#ff9f43", yellow:"#ffd54f", green:"#3ddc84",
+  teal:"#38d4c3", blue:"#5b8def", indigo:"#7986cb", purple:"#b58cff", pink:"#f48fb1", brown:"#a1887f" };
+const blockColor = b => (b.color && BLOCK_PALETTE[b.color]) || (BLOCK_TYPES[b.type]||BLOCK_TYPES.event).color;
+const minToHM = m => `${pad(Math.floor(m/60))}:${pad(m%60)}`;
+const blocksFor = dk => S.timeBlocks.filter(b=>b.date===dk).sort((a,b)=>a.start_min-b.start_min);
+
+function renderPlan(){
+  const el = $("#view-plan");
+  if (!S.planDate) S.planDate = dayKey(new Date());
+  const sel = new Date(S.planDate+"T12:00:00");
+
+  // Wochenleiste (Mo–So der Woche des gewählten Tags)
+  const mon = new Date(sel); mon.setDate(mon.getDate() - ((mon.getDay()+6)%7));
+  let strip = `<div class="weekstrip">`;
+  for (let i=0;i<7;i++){
+    const d = new Date(mon); d.setDate(d.getDate()+i);
+    const dk = dayKey(d);
+    const dots = blocksFor(dk).slice(0,4).map(b=>`<i style="background:${blockColor(b)}"></i>`).join("");
+    strip += `<button class="${dk===S.planDate?"sel":""}" data-d="${dk}">
+      <span>${WEEKDAYS_DE[d.getDay()]}</span><b>${d.getDate()}</b><span class="dots">${dots}</span></button>`;
+  }
+  strip += `</div>`;
+
+  const monthStr = sel.toLocaleDateString("de-DE",{month:"long",year:"numeric"});
+  const isTodaySel = S.planDate===dayKey(new Date());
+  const nav = `<div class="plannav">
+    <button class="iconbtn" id="pl_prev">‹</button>
+    <b>${sel.toLocaleDateString("de-DE",{weekday:"long",day:"numeric",month:"long"})}${isTodaySel?" · heute":""}</b>
+    <div><button class="btn small sec" id="pl_today" ${isTodaySel?"disabled":""}>Heute</button>
+    <button class="iconbtn" id="pl_next">›</button></div></div>`;
+
+  // Timeline 05–24 Uhr (Blöcke davor werden geklemmt), 1h = 44px
+  const H0=5, PXH=44, top = m => Math.max(0,(m/60-H0))*PXH;
+  const blocks = blocksFor(S.planDate);
+  let tl = `<div class="timeline" style="height:${(24-H0)*PXH+10}px">`;
+  for (let h=H0; h<=24; h++)
+    tl += `<div class="tl-hour" style="top:${(h-H0)*PXH}px"><span>${pad(h%24)}:00</span></div>`;
+  if (isTodaySel){
+    const nowM = new Date().getHours()*60+new Date().getMinutes();
+    if (nowM >= H0*60) tl += `<div class="tl-now" style="top:${top(nowM)}px"></div>`;
+  }
+  blocks.forEach(b=>{
+    const end = b.end_min > b.start_min ? b.end_min : 1440;
+    const h = Math.max(20, top(end)-top(b.start_min)-2);
+    const c = blockColor(b);
+    const t = BLOCK_TYPES[b.type]||BLOCK_TYPES.event;
+    tl += `<div class="tl-block" data-id="${b.id}" style="top:${top(b.start_min)+1}px;height:${h}px;
+      background:${c}22;border-left-color:${c}">
+      <b>${t.ico} ${esc(b.title||t.label)}</b>
+      ${h>34?`<span>${minToHM(b.start_min)}–${minToHM(b.end_min)}${b.notes?" · "+esc(b.notes):""}</span>`:""}</div>`;
+  });
+  tl += `</div>`;
+  const empty = blocks.length ? "" : `<div class="section-empty" style="text-align:center;padding-top:10px">Noch keine Blöcke – mit + einen anlegen (Arbeit, Termin, Fahrt …)</div>`;
+
+  el.innerHTML = nav + strip + tl + empty + `<div style="height:8px"></div>`;
+
+  $$(".weekstrip button", el).forEach(b=>b.onclick=()=>{ S.planDate=b.dataset.d; renderPlan(); });
+  const shift = days => { const d=new Date(S.planDate+"T12:00:00"); d.setDate(d.getDate()+days); S.planDate=dayKey(d); renderPlan(); };
+  $("#pl_prev").onclick = ()=>shift(-1);
+  $("#pl_next").onclick = ()=>shift(1);
+  $("#pl_today").onclick = ()=>{ S.planDate=dayKey(new Date()); renderPlan(); };
+  $$(".tl-block", el).forEach(x=>x.onclick=()=>{
+    const b=S.timeBlocks.find(y=>y.id===x.dataset.id); if(b) openBlockForm(b);
+  });
+}
+
+function openBlockForm(b){
+  const isNew = !b;
+  b = b || { date:S.planDate||dayKey(new Date()), type:"event", start_min:540, end_min:600, title:"", notes:"", color:"" };
+  const typeOpts = Object.entries(BLOCK_TYPES).map(([k,v])=>
+    `<option value="${k}" ${b.type===k?"selected":""}>${v.ico} ${v.label}</option>`).join("");
+  const colorBtns = Object.entries(BLOCK_PALETTE).map(([k,v])=>
+    `<button type="button" class="cbtn ${b.color===k?"on":""}" data-c="${k}" style="width:30px;height:30px;border-radius:50%;
+     border:3px solid ${b.color===k?"#fff":"transparent"};background:${v};cursor:pointer"></button>`).join("");
+  openModal(`
+    <h3>${isNew?"Neuer Block":"Block bearbeiten"}</h3>
+    <label>Titel</label><input id="b_title" value="${esc(b.title)}" placeholder="z.B. Zahnarzt, Büro, Zugfahrt…">
+    <div class="mrow">
+      <div><label>Datum</label><input type="date" id="b_date" value="${b.date}"></div>
+      <div><label>Art</label><select id="b_type">${typeOpts}</select></div>
+    </div>
+    <div class="mrow">
+      <div><label>Von</label><input type="time" id="b_start" value="${minToHM(b.start_min)}"></div>
+      <div><label>Bis</label><input type="time" id="b_end" value="${minToHM(b.end_min)}"></div>
+    </div>
+    <label>Eigene Farbe (optional)</label>
+    <div style="display:flex;gap:7px;flex-wrap:wrap;padding:4px 0">${colorBtns}</div>
+    <label>Notiz</label><input id="b_notes" value="${esc(b.notes)}">
+    <div style="height:18px"></div>
+    <button class="btn" id="b_save">${isNew?"Anlegen":"Speichern"}</button>
+    ${isNew?"":`<div style="height:8px"></div><button class="btn danger" id="b_del">Löschen</button>`}
+  `);
+  let color = b.color||"";
+  $$(".cbtn").forEach(x=>x.onclick=()=>{
+    color = (color===x.dataset.c) ? "" : x.dataset.c;
+    $$(".cbtn").forEach(y=>y.style.border=`3px solid ${color===y.dataset.c?"#fff":"transparent"}`);
+  });
+  const hmToMin = v => { const [h,m]=v.split(":").map(Number); return h*60+(m||0); };
+  $("#b_save").onclick = async ()=>{
+    const row = {
+      date: $("#b_date").value, title: $("#b_title").value.trim(),
+      type: $("#b_type").value, notes: $("#b_notes").value, color,
+      start_min: hmToMin($("#b_start").value||"09:00"), end_min: hmToMin($("#b_end").value||"10:00"),
+    };
+    if (!row.date) return toast("Bitte Datum wählen.", true);
+    if (row.end_min <= row.start_min && row.type!=="sleep") return toast("Ende muss nach Beginn liegen.", true);
+    const q = isNew ? sb.from("time_blocks").insert(row) : sb.from("time_blocks").update(row).eq("id", b.id);
+    const { error } = await q;
+    if (error) return toast("Fehler: "+error.message+(error.message.includes("time_blocks")?" – update-kalender.sql ausführen!":""), true);
+    S.planDate = row.date;
+    closeModal(); loadAll();
+  };
+  if (!isNew) $("#b_del").onclick = async ()=>{
+    if(!confirm("Block löschen?")) return;
+    await sb.from("time_blocks").delete().eq("id", b.id); closeModal(); loadAll();
+  };
+}
+
+// ============================================================
+// 💬 Assistent (OpenAI, Key bleibt lokal auf dem Gerät)
+// ============================================================
+const AI_TOOLS = [
+  { type:"function", function:{ name:"create_task",
+    description:"Neue Aufgabe anlegen",
+    parameters:{ type:"object", properties:{
+      title:{type:"string"}, duration_minutes:{type:"integer",description:"geschätzte Dauer, Standard 15"},
+      location:{type:"string",description:"Ort/Liste, muss einer der vorhandenen Orte sein"},
+      kind:{type:"string",enum:["oneOff","recurring"]},
+      recurrence:{type:"string",enum:["daily","weekly","customDays"]},
+      custom_recurrence_days:{type:"integer"},
+      is_priority:{type:"boolean"},
+      due_date:{type:"string",description:"YYYY-MM-DD, optional"},
+      notes:{type:"string"}, tags:{type:"array",items:{type:"string"}},
+    }, required:["title"] } } },
+  { type:"function", function:{ name:"create_appointment",
+    description:"Termin/Zeitblock im Kalender anlegen",
+    parameters:{ type:"object", properties:{
+      date:{type:"string",description:"YYYY-MM-DD"},
+      title:{type:"string"},
+      start:{type:"string",description:"HH:MM"}, end:{type:"string",description:"HH:MM"},
+      type:{type:"string",enum:["work","home","travel","event","routine","free","sleep"],description:"Standard: event"},
+      notes:{type:"string"},
+    }, required:["date","title","start","end"] } } },
+  { type:"function", function:{ name:"add_work_entry",
+    description:"Arbeitszeit-Eintrag nachtragen",
+    parameters:{ type:"object", properties:{
+      date:{type:"string",description:"YYYY-MM-DD"},
+      start:{type:"string",description:"HH:MM"}, end:{type:"string",description:"HH:MM"},
+      break_minutes:{type:"integer"}, notes:{type:"string"},
+    }, required:["date","start","end"] } } },
+  { type:"function", function:{ name:"complete_task",
+    description:"Eine Aufgabe als erledigt abhaken (per Titel, unscharfe Suche)",
+    parameters:{ type:"object", properties:{ title:{type:"string"} }, required:["title"] } } },
+  { type:"function", function:{ name:"delete_appointment",
+    description:"Termin/Zeitblock löschen (per Titel und Datum)",
+    parameters:{ type:"object", properties:{
+      title:{type:"string"}, date:{type:"string",description:"YYYY-MM-DD"} }, required:["title","date"] } } },
+];
+
+function aiContext(){
+  const today = new Date();
+  const dk = dayKey(today);
+  const openTasks = S.tasks.filter(t=>!t.is_archived && !isCompletedToday(t)).slice(0,60)
+    .map(t=>`- ${t.title} (${t.location||"?"}${t.is_priority?", ⭐":""}${t.due_date?", fällig "+dayKey(new Date(t.due_date)):""})`).join("\n");
+  const week = [];
+  for (let i=0;i<7;i++){ const d=new Date(); d.setDate(d.getDate()+i); const k=dayKey(d);
+    const bl=blocksFor(k); if(bl.length) week.push(`${k} (${WEEKDAYS_DE[d.getDay()]}): `+bl.map(b=>`${minToHM(b.start_min)}-${minToHM(b.end_min)} ${b.title||b.type}`).join("; ")); }
+  return `Du bist der Assistent der deutschsprachigen To-Do-App "Procrastination Lists" von Finn.
+Heute ist ${today.toLocaleDateString("de-DE",{weekday:"long",day:"2-digit",month:"2-digit",year:"numeric"})} (${dk}), Uhrzeit ${fmtTime(today)}.
+Du kannst per Tools Aufgaben, Termine (Zeitblöcke) und Arbeitszeiten anlegen, Aufgaben abhaken und Termine löschen.
+Relative Datumsangaben ("morgen", "Freitag") immer in konkrete Daten umrechnen. Bei fehlender Endzeit eines Termins nimm 1 Stunde.
+Verfügbare Orte/Listen: ${S.locations.map(l=>l.name).join(", ")}. Wenn kein Ort passt, nimm "To-Do".
+Antworte kurz, freundlich, auf Deutsch. Fasse nach Tool-Aufrufen knapp zusammen, was du angelegt hast.
+
+Offene Aufgaben:
+${openTasks||"(keine)"}
+
+Kalender der nächsten 7 Tage:
+${week.join("\n")||"(leer)"}`;
+}
+
+async function aiExecTool(name, args){
+  const hm = v => { const [h,m]=String(v||"0:0").split(":").map(Number); return h*60+(m||0); };
+  try {
+    if (name==="create_task"){
+      const row = { title:args.title, duration_minutes:args.duration_minutes||15,
+        location: S.locations.some(l=>l.name===(args.location||""))?args.location:(S.locations.find(l=>l.name==="To-Do")?.name||S.locations[0]?.name||""),
+        kind:args.kind||"oneOff", recurrence:args.recurrence||"daily",
+        custom_recurrence_days:args.custom_recurrence_days||2,
+        is_priority:!!args.is_priority, notes:args.notes||"", tags:args.tags||[],
+        due_date: args.due_date ? new Date(args.due_date+"T23:59:00").toISOString() : null };
+      const { error } = await sb.from("tasks").insert(row);
+      if (error) throw error;
+      return { ok:true, info:`Aufgabe "${args.title}" angelegt (${row.location})` };
+    }
+    if (name==="create_appointment"){
+      const row = { date:args.date, title:args.title, type:args.type||"event",
+        start_min:hm(args.start), end_min:hm(args.end), notes:args.notes||"", color:"" };
+      const { error } = await sb.from("time_blocks").insert(row);
+      if (error) throw error;
+      return { ok:true, info:`Termin "${args.title}" am ${args.date} ${args.start}–${args.end}` };
+    }
+    if (name==="add_work_entry"){
+      const st = new Date(`${args.date}T${args.start}:00`), en = new Date(`${args.date}T${args.end}:00`);
+      const { error } = await sb.from("work_entries").insert({ start_time:st.toISOString(), end_time:en.toISOString(),
+        break_minutes:args.break_minutes||0, notes:args.notes||"" });
+      if (error) throw error;
+      return { ok:true, info:`Arbeitszeit ${args.date} ${args.start}–${args.end} eingetragen` };
+    }
+    if (name==="complete_task"){
+      const q = (args.title||"").toLowerCase();
+      const t = S.tasks.find(x=>!x.is_archived && !isCompletedToday(x) && x.title.toLowerCase().includes(q));
+      if (!t) return { ok:false, info:`Keine offene Aufgabe gefunden, die zu "${args.title}" passt.` };
+      await completeTask(t);
+      return { ok:true, info:`"${t.title}" abgehakt` };
+    }
+    if (name==="delete_appointment"){
+      const q = (args.title||"").toLowerCase();
+      const b = S.timeBlocks.find(x=>x.date===args.date && (x.title||"").toLowerCase().includes(q));
+      if (!b) return { ok:false, info:`Kein Termin "${args.title}" am ${args.date} gefunden.` };
+      const { error } = await sb.from("time_blocks").delete().eq("id", b.id);
+      if (error) throw error;
+      return { ok:true, info:`Termin "${b.title}" am ${args.date} gelöscht` };
+    }
+    return { ok:false, info:"Unbekanntes Tool" };
+  } catch(e){ return { ok:false, info:"Fehler: "+(e.message||e) }; }
+}
+
+function openChat(){
+  openModal(`
+    <h3 style="margin-bottom:10px">💬 Assistent</h3>
+    <div class="chatwrap">
+      <div class="chatlog" id="chatLog"></div>
+      <div class="chatinput">
+        <input id="chatIn" placeholder="z.B. Freitag 14 Uhr Zahnarzt eintragen…" autocomplete="off">
+        <button id="chatSend">➤</button>
+      </div>
+    </div>
+  `);
+  renderChat();
+  $("#chatSend").onclick = sendChat;
+  $("#chatIn").addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.preventDefault(); sendChat(); } });
+  if (!localStorage.getItem("wopAiKey")){
+    S.chat.push({ role:"sys", text:"Hinterlege zuerst deinen OpenAI API-Key unter ⚙️ Einstellungen." });
+    renderChat();
+  } else if (!S.chat.length){
+    S.chat.push({ role:"bot", text:"Hi Finn! Was soll ich für dich eintragen? Termine, Aufgaben oder Arbeitszeiten – sag's einfach. 😊" });
+    renderChat();
+  }
+  setTimeout(()=>$("#chatIn") && $("#chatIn").focus(), 150);
+}
+
+function renderChat(){
+  const log = $("#chatLog"); if (!log) return;
+  log.innerHTML = S.chat.map(m=>{
+    const cls = m.role==="user"?"user":m.role==="act"?"act":m.role==="sys"?"sys":"bot";
+    return `<div class="cmsg ${cls}">${esc(m.text)}</div>`;
+  }).join("") + (S.chatBusy?`<div class="typing">Assistent denkt…</div>`:"");
+  log.scrollTop = log.scrollHeight;
+}
+
+async function sendChat(){
+  const inp = $("#chatIn");
+  const text = inp.value.trim();
+  if (!text || S.chatBusy) return;
+  const key = localStorage.getItem("wopAiKey");
+  if (!key){ toast("Erst API-Key in ⚙️ Einstellungen speichern.", true); return; }
+  inp.value = "";
+  S.chat.push({ role:"user", text });
+  S.chatBusy = true; renderChat();
+
+  // Nachrichtenverlauf für die API (nur user/bot-Texte)
+  const msgs = [{ role:"system", content: aiContext() }];
+  S.chat.filter(m=>m.role==="user"||m.role==="bot").slice(-12)
+    .forEach(m=>msgs.push({ role: m.role==="user"?"user":"assistant", content:m.text }));
+
+  try {
+    let rounds = 0, didWrite = false;
+    while (rounds++ < 5){
+      const r = await fetch("https://api.openai.com/v1/chat/completions", {
+        method:"POST",
+        headers:{ "Authorization":"Bearer "+key, "Content-Type":"application/json" },
+        body: JSON.stringify({ model:"gpt-4o-mini", messages:msgs, tools:AI_TOOLS, tool_choice:"auto", temperature:0.3 })
+      });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error.message||"API-Fehler");
+      const msg = d.choices[0].message;
+      msgs.push(msg);
+      if (msg.tool_calls && msg.tool_calls.length){
+        for (const tc of msg.tool_calls){
+          let args={}; try{ args=JSON.parse(tc.function.arguments||"{}"); }catch(e){}
+          const res = await aiExecTool(tc.function.name, args);
+          if (res.ok){ didWrite = true; S.chat.push({ role:"act", text:"✓ "+res.info }); renderChat(); }
+          msgs.push({ role:"tool", tool_call_id:tc.id, content: JSON.stringify(res) });
+        }
+        continue; // nächste Runde: Modell fasst zusammen
+      }
+      S.chat.push({ role:"bot", text: msg.content || "Erledigt." });
+      break;
+    }
+    if (didWrite) loadAll();
+  } catch(e){
+    S.chat.push({ role:"sys", text:"⚠️ "+(e.message||"Verbindung fehlgeschlagen") });
+  }
+  S.chatBusy = false; renderChat();
 }
