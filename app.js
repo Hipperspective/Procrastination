@@ -18,7 +18,7 @@ const S = {
   user: null,
   tasks: [], locations: [], completions: [], workEntries: [], settings: {}, timeBlocks: [],
   planDate: null, chat: [], chatBusy: false,
-  locFilter: "ALLE", tagFilter: null, tab: "home",
+  locFilter: "ALLE", tagFilter: null, tab: "home", search: "", collapsed: new Set(), showAllDue: false,
   expanded: new Set(),   // task ids with open subtasks
   tickTimer: null,
 };
@@ -283,9 +283,12 @@ async function toggleSubtask(t, subId){
 
 // ---------- Rendering: Aufgaben ----------
 function visibleTasks(){
+  const q = S.search.trim().toLowerCase();
   return S.tasks.filter(t => !t.is_archived)
     .filter(t => S.locFilter==="ALLE" || (t.location||"") === S.locFilter)
-    .filter(t => !S.tagFilter || (t.tags||[]).some(x => x.toLowerCase()===S.tagFilter.toLowerCase()));
+    .filter(t => !S.tagFilter || (t.tags||[]).some(x => x.toLowerCase()===S.tagFilter.toLowerCase()))
+    .filter(t => !q || t.title.toLowerCase().includes(q) || (t.notes||"").toLowerCase().includes(q)
+      || (t.tags||[]).some(x=>x.toLowerCase().includes(q)) || (t.location||"").toLowerCase().includes(q));
 }
 
 function renderLocationChips(){
@@ -357,7 +360,7 @@ function taskRow(t){
 
   return `<div class="task ${done?"done":""}" data-id="${t.id}">
     <button class="chk ${chkClass}" ${done||blocked?(done?"":"disabled"):""} title="Erledigt">${chkContent}</button>
-    <div class="main">
+    <div class="main" role="button" tabindex="0">
       <div class="title">${esc(t.title)}</div>
       <div class="meta">${meta.join(" ")}</div>
       ${subHtml}
@@ -383,13 +386,25 @@ function renderTasks(){
 
   let html = "";
   const section = (title, arr) => arr.length ? `<h2>${title}</h2>` + arr.map(taskRow).join("") : "";
-  html += section("🔥 Jetzt fällig", dueNow);
+  // "Jetzt fällig" deckeln, damit es keine Wand wird
+  const DUE_CAP = 7;
+  if (!S.showAllDue && dueNow.length > DUE_CAP){
+    html += section("🔥 Jetzt fällig", dueNow.slice(0, DUE_CAP));
+    html += `<button class="btn sec" id="showAllDue" style="margin-bottom:6px">＋ ${dueNow.length-DUE_CAP} weitere fällige anzeigen</button>`;
+  } else {
+    html += section("🔥 Jetzt fällig", dueNow);
+  }
   if (S.locFilter==="ALLE"){
     // Nach Ort/Kategorie gruppieren (Reihenfolge wie in den Einstellungen)
     const palette = ["#6c8cff","#3ddc84","#ff9f43","#b58cff","#38d4c3","#ffd54f","#f48fb1","#ff5d6c","#7986cb","#a1887f"];
-    const locSection = (name, color, arr) => arr.length ? `
-      <div class="locsec"><span class="dot" style="background:${color}"></span>
-      <h2>${esc(name)}</h2><span class="cnt">${arr.length}</span></div>` + arr.map(taskRow).join("") : "";
+    const locSection = (name, color, arr) => {
+      if (!arr.length) return "";
+      const collapsed = S.collapsed.has(name);
+      return `<div class="locsec" data-sec="${esc(name)}" role="button" tabindex="0">
+        <span class="dot" style="background:${color}"></span>
+        <h2>${esc(name)}</h2><span class="cnt">${arr.length}</span><span class="arr">${collapsed?"▸":"▾"}</span></div>`
+        + (collapsed ? "" : arr.map(taskRow).join(""));
+    };
     S.locations.forEach((l,i)=>{
       html += locSection(l.name, palette[i%palette.length], openRest.filter(t=>(t.location||"")===l.name));
     });
@@ -400,7 +415,16 @@ function renderTasks(){
   }
   html += section("Nicht heute", inactive);
   html += section("Heute erledigt", doneToday);
+  const archN = S.tasks.filter(t=>t.is_archived).length;
+  if (archN) html += `<div style="text-align:center;padding:14px 0"><a id="toArchive" style="color:var(--accent2);font-weight:700;font-size:13.5px;cursor:pointer">🗂 Archiv (${archN}) ›</a></div>`;
   el.innerHTML = html;
+  const sad = $("#showAllDue"); if (sad) sad.onclick = ()=>{ S.showAllDue = true; renderTasks(); };
+  const ta = $("#toArchive"); if (ta) ta.onclick = ()=>switchTab("archive");
+  $$(".locsec[data-sec]", el).forEach(sec=>sec.onclick = ()=>{
+    const n = sec.dataset.sec;
+    S.collapsed.has(n) ? S.collapsed.delete(n) : S.collapsed.add(n);
+    renderTasks();
+  });
 
   // Events
   $$(".task", el).forEach(row => {
@@ -427,7 +451,7 @@ function renderArchive(){
   const arch = S.tasks.filter(t=>t.is_archived).sort((a,b)=>new Date(b.last_done_at||b.created_at)-new Date(a.last_done_at||a.created_at));
   if (!arch.length){ el.innerHTML = `<div class="empty">Archiv ist leer.<br>Erledigte einmalige Aufgaben landen hier.</div>`; return; }
   el.innerHTML = arch.map(t=>`<div class="task done" data-id="${t.id}">
-      <div class="main"><div class="title">${esc(t.title)}</div>
+      <div class="main" role="button" tabindex="0"><div class="title">${esc(t.title)}</div>
       <div class="meta">✓ ${t.last_done_at?fmtDate(new Date(t.last_done_at)):""} ${t.location?("· 📍 "+esc(t.location)):""}</div></div>
       <button class="btn small sec" data-act="restore">↩︎</button>
       <button class="iconbtn" data-act="del">🗑</button>
@@ -447,9 +471,18 @@ function renderArchive(){
 
 // ---------- Modal-Grundgerüst ----------
 function openModal(html){
-  $("#modalBox").innerHTML = html;
+  const box = $("#modalBox");
+  box.setAttribute("role","dialog"); box.setAttribute("aria-modal","true");
+  box.innerHTML = html;
   $("#modalBg").classList.add("open");
 }
+document.addEventListener("keydown", e=>{
+  if (e.key==="Escape" && $("#modalBg").classList.contains("open")) closeModal();
+  // Enter/Leertaste auf role=button-Divs (Tastatur-Bedienung am Mac)
+  if ((e.key==="Enter"||e.key===" ") && e.target.matches && e.target.matches('[role="button"]:not(button)')){
+    e.preventDefault(); e.target.click();
+  }
+});
 function closeModal(){ $("#modalBg").classList.remove("open"); }
 $("#modalBg").addEventListener("click", e=>{ if(e.target.id==="modalBg") closeModal(); });
 
@@ -476,6 +509,8 @@ function startApp(){
   $("#authScreen").classList.add("hidden");
   $("#app").classList.remove("hidden");
   $$(".tabbar button").forEach(b => b.onclick = ()=>switchTab(b.dataset.tab));
+  const sIn = $("#searchTasks");
+  if (sIn) sIn.oninput = ()=>{ S.search = sIn.value; renderTasks(); };
   $("#fab").onclick = ()=>{ if(S.tab==="work") openWorkEntryForm(null); else if(S.tab==="plan") openBlockForm(null); else openTaskForm(null); };
   $("#btnChat").onclick = openChat;
   $("#btnSettings").onclick = openSettings;
@@ -502,6 +537,8 @@ function openTaskForm(t){
   const depOpts = `<option value="">– keine –</option>` + others.map(x=>
     `<option value="${x.id}" ${t.dependency_task_id===x.id?"selected":""}>${esc(x.title)}</option>`).join("");
 
+  const hasExtra = !isNew && ((t.repeat_count||1)>1 || t.repeat_cooldown_minutes>0 || t.due_date || t.start_date
+    || t.dependency_task_id || (t.tags||[]).length || (t.subtasks||[]).length || (t.notes||"").length);
   const dtLocal = iso => { if(!iso) return ""; const d=new Date(iso);
     return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   const dLocal = iso => iso ? dayKey(new Date(iso)) : "";
@@ -531,6 +568,8 @@ function openTaskForm(t){
       <div class="wkdays" id="f_wk">${[2,3,4,5,6,7,1].map(d=>
         `<button type="button" data-d="${d}" class="${wk.has(d)?"on":""}">${WEEKDAYS_DE[d-1]}</button>`).join("")}</div>
     </div>
+    <details class="moreopts" ${hasExtra?"open":""}>
+      <summary>Mehr Optionen</summary>
     <div class="mrow">
       <div><label>Wiederholungen pro Tag</label><input id="f_repeat" type="number" min="1" value="${t.repeat_count||1}"></div>
       <div><label>Pause dazwischen (Min., 0 = keine)</label><input id="f_cool" type="number" min="0" value="${t.repeat_cooldown_minutes||0}"></div>
@@ -545,6 +584,7 @@ function openTaskForm(t){
     <div class="sublistedit" id="f_subs"></div>
     <div class="mrow"><input id="f_newsub" placeholder="Unteraufgabe hinzufügen…"><button class="btn small sec" id="f_addsub" style="width:auto">+</button></div>
     <label>Notizen</label><textarea id="f_notes" rows="3">${esc(t.notes||"")}</textarea>
+    </details>
     <div style="height:18px"></div>
     <button class="btn" id="f_save">${isNew?"Aufgabe anlegen":"Speichern"}</button>
     ${isNew?"":`<div style="height:8px"></div><button class="btn danger" id="f_del">Löschen</button>`}
@@ -687,7 +727,7 @@ function renderWork(){
     listHtml += `<div class="card"><div style="display:flex;justify-content:space-between;margin-bottom:4px">
       <b style="font-size:13.5px">${fmtDateShort(new Date(k+"T12:00:00"))}</b>
       <b style="font-size:13.5px;color:var(--accent2)">${fmtMin(sum)}</b></div>` +
-      arr.map(w=>`<div class="wt-entry" data-id="${w.id}">
+      arr.map(w=>`<div class="wt-entry" data-id="${w.id}" role="button" tabindex="0">
         <div><div class="t">${fmtTime(new Date(w.start_time))} – ${w.end_time?fmtTime(new Date(w.end_time)):"…"}${w.break_minutes||w.break_started_at?` <span class="n">(P: ${fmtMin(w.break_minutes)})</span>`:""}</div>
         ${w.notes?`<div class="n">${esc(w.notes)}</div>`:""}</div>
         <div class="dur">${fmtMin(workedMinutes(w))}</div></div>`).join("") + `</div>`;
@@ -709,7 +749,7 @@ function renderWork(){
         const arr = closed.filter(w=>periodKeyOf(w.start_time,mode)===k)
           .sort((a,b)=>new Date(b.start_time)-new Date(a.start_time));
         inner = `<div style="margin-top:8px;border-top:1px solid var(--line);padding-top:4px">` +
-          arr.map(w=>`<div class="wt-entry" data-id="${w.id}">
+          arr.map(w=>`<div class="wt-entry" data-id="${w.id}" role="button" tabindex="0">
             <div><div class="t">${fmtDateShort(new Date(w.start_time))} · ${fmtTime(new Date(w.start_time))}–${fmtTime(new Date(w.end_time))}${w.break_minutes?` <span class="n">(P: ${fmtMin(w.break_minutes)})</span>`:""}</div>
             ${w.notes?`<div class="n">${esc(w.notes)}</div>`:""}</div>
             <div class="dur">${fmtMin(workedMinutes(w))}</div></div>`).join("") + `</div>`;
@@ -1205,12 +1245,13 @@ async function renderHome(){
     const t = p.t;
     const bits = [];
     bits.push(fmtMin(t.duration_minutes));
-    if (t.location) bits.push("📍 "+esc(t.location));
+    if (t.location) bits.push(esc(t.location));
     if (!p.done && t.repeat_count>1) bits.push(`${effCompletedToday(t)}/${t.repeat_count}×`);
     const st = taskDueState(t);
     if (!p.done && st.label && st.cls) bits.push(`<span class="${st.cls}">${st.label}</span>`);
-    return `<div class="planrow ${p.done?"pdone":""}" data-id="${t.id}">
-      <span class="ptime">${p.time || (p.done?"✓":(t.is_priority?"★":"•"))}</span>
+    return `<div class="planrow ${p.done?"pdone":""}" data-id="${t.id}" role="button" tabindex="0" style="padding:11px 0">
+      <button class="chk ${p.done?"on":""}" data-chk="${t.id}" style="width:24px;height:24px;min-width:24px;margin:0;font-size:12px" aria-label="Erledigt">${p.done?"✓":"✓"}</button>
+      ${p.time?`<span class="ptime">${p.time}</span>`:(t.is_priority?`<span class="ptime star">★</span>`:"")}
       <span class="pt">${esc(t.title)}</span>
       <span class="pm">${bits.join(" · ")}</span></div>`;
   };
@@ -1246,8 +1287,9 @@ async function renderHome(){
     ${ routineCardsHtml() }
     ${ homeBlockRows() ? `<div class="homehead"><h2>📅 Termine heute</h2><a id="homeToPlan">Zum Plan ›</a></div>
     <div class="card">${homeBlockRows()}</div>` : "" }
-    <div class="homehead"><h2>📋 Aufgaben</h2><a id="homeToTasks">Alle Aufgaben ›</a></div>
-    <div class="card">${ openPlan.length ? openPlan.map(planRow).join("")
+    <div class="homehead"><h2>📋 Als Nächstes</h2><a id="homeToTasks">Alle Aufgaben ›</a></div>
+    <div class="card">${ openPlan.length ? (openPlan.slice(0,5).map(planRow).join("")
+      + (openPlan.length>5 ? `<div style="text-align:center;padding-top:8px"><a id="homeMore" style="color:var(--accent2);font-size:12.5px;font-weight:700;cursor:pointer">＋ ${openPlan.length-5} weitere ›</a></div>` : ""))
       : `<div class="section-empty">${totalN?"Alles erledigt – stark! 🎉":"Heute steht nichts an. Genieß den Tag ☕️"}</div>`}</div>
     ${donePlan.length?`<div class="card" style="opacity:.65">${donePlan.map(planRow).join("")}</div>`:""}
   `;
@@ -1259,8 +1301,16 @@ async function renderHome(){
     const b=S.timeBlocks.find(x=>x.id===row.dataset.block); if(b) openBlockForm(b);
   });
   $("#homeWork").onclick = ()=>switchTab("work");
+  const hm2 = $("#homeMore"); if (hm2) hm2.onclick = ()=>switchTab("tasks");
   $$(".planrow[data-id]", el).forEach(row=>{
-    row.onclick = ()=>{ const t=S.tasks.find(x=>x.id===row.dataset.id); if(t) openTaskForm(t); };
+    const t = S.tasks.find(x=>x.id===row.dataset.id);
+    const chk = $("[data-chk]", row);
+    if (chk) chk.onclick = (e)=>{ e.stopPropagation();
+      if (!t) return;
+      if (isCompletedToday(t)){ if(confirm("Erledigung zurücknehmen?")) uncompleteToday(t); }
+      else completeTask(t);
+    };
+    row.onclick = ()=>{ if(t) openTaskForm(t); };
   });
 
   // Wetter asynchron nachladen
@@ -1288,7 +1338,7 @@ async function renderHome(){
         <div><div class="wtemp">${Math.round(w.current.temperature_2m)}°</div><div class="wdesc">${txt}${locName?" · "+esc(locName):""}</div></div>
         <div class="wmeta">H ${dmax}° · T ${dmin}°<br>☔️ ${rain??0}% · 💨 ${Math.round(w.current.wind_speed_10m)} km/h<br>Morgen: ${ico2} ${Math.round(w.daily.temperature_2m_max[1])}°</div>
       </div>
-      <div style="text-align:right;margin-top:6px"><a style="font-size:11.5px;color:var(--dim2);cursor:pointer" id="wChange">Ort ändern</a></div>`;
+      <div style="text-align:right;margin-top:6px"><a style="font-size:11.5px;color:var(--dim2);cursor:pointer" id="wChange">Standort ändern</a></div>`;
       $("#wChange").onclick = openCityPicker;
     }
   }
@@ -1352,7 +1402,7 @@ function renderPlan(){
     const h = Math.max(20, top(end)-top(b.start_min)-2);
     const c = blockColor(b);
     const t = BLOCK_TYPES[b.type]||BLOCK_TYPES.event;
-    tl += `<div class="tl-block" data-id="${b.id}" style="top:${top(b.start_min)+1}px;height:${h}px;
+    tl += `<div class="tl-block" data-id="${b.id}" role="button" tabindex="0" style="top:${top(b.start_min)+1}px;height:${h}px;
       background:${c}22;border-left-color:${c}">
       <b>${t.ico} ${esc(b.title||t.label)}</b>
       ${h>34?`<span>${minToHM(b.start_min)}–${minToHM(b.end_min)}${b.notes?" · "+esc(b.notes):""}</span>`:""}</div>`;
@@ -1549,8 +1599,11 @@ function openChat(){
   $("#chatSend").onclick = sendChat;
   $("#chatIn").addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.preventDefault(); sendChat(); } });
   if (!localStorage.getItem("wopAiKey")){
-    S.chat.push({ role:"sys", text:"Hinterlege zuerst deinen OpenAI API-Key unter ⚙️ Einstellungen." });
-    renderChat();
+    $("#chatLog").innerHTML = `<div class="cmsg sys" style="margin-top:20px">Der Assistent braucht einmalig deinen OpenAI API-Key.</div>
+      <button class="btn" id="chatKeyBtn" style="margin-top:10px">🔑 Key jetzt hinterlegen</button>`;
+    $("#chatKeyBtn").onclick = ()=>{ closeModal(); openSettings();
+      setTimeout(()=>{ const k=$("#s_aikey"); if(k){ k.scrollIntoView({block:"center"}); k.focus(); } }, 250); };
+    return;
   } else if (!S.chat.length){
     S.chat.push({ role:"bot", text:"Hi Finn! Was soll ich für dich eintragen? Termine, Aufgaben oder Arbeitszeiten – sag's einfach. 😊" });
     renderChat();
@@ -1641,7 +1694,7 @@ function routineCardsHtml(){
     const done = tasks.filter(isCompletedToday).length;
     const all = done===tasks.length;
     const m = routineMeta(l.name);
-    return `<div class="card routinecard" data-loc="${esc(l.name)}" style="margin:0;cursor:pointer;border-left:4px solid ${m.color}">
+    return `<div class="card routinecard" data-loc="${esc(l.name)}" role="button" tabindex="0" style="margin:0;cursor:pointer;border-left:4px solid ${m.color}">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <b style="font-size:14px">${m.ico} ${esc(l.name)}</b>
         <span style="font-size:12.5px;font-weight:800;color:${all?"var(--green)":m.color}">${all?"✓ fertig":done+"/"+tasks.length}</span>
