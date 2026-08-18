@@ -657,9 +657,45 @@ function renderWork(){
         <div class="dur">${fmtMin(workedMinutes(w))}</div></div>`).join("") + `</div>`;
   });
 
+  // Verlauf: frühere Perioden (Monate/Wochen) mit Summe und Abweichung vom Soll
+  const histKeys = Object.keys(byPeriod).sort().reverse();
+  let histHtml = "";
+  if (histKeys.length){
+    const monthNames = ["Jänner","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"];
+    const label = k => mode==="week"
+      ? "Woche ab " + fmtDate(new Date(k+"T12:00:00"))
+      : monthNames[+k.slice(5,7)-1] + " " + k.slice(0,4);
+    histHtml = `<h2>Verlauf</h2>` + histKeys.map(k=>{
+      const sum = byPeriod[k], diff = sum - target;
+      const open = S.wtExpand === k;
+      let inner = "";
+      if (open){
+        const arr = closed.filter(w=>periodKeyOf(w.start_time,mode)===k)
+          .sort((a,b)=>new Date(b.start_time)-new Date(a.start_time));
+        inner = `<div style="margin-top:8px;border-top:1px solid var(--line);padding-top:4px">` +
+          arr.map(w=>`<div class="wt-entry" data-id="${w.id}">
+            <div><div class="t">${fmtDateShort(new Date(w.start_time))} · ${fmtTime(new Date(w.start_time))}–${fmtTime(new Date(w.end_time))}${w.break_minutes?` <span class="n">(P: ${fmtMin(w.break_minutes)})</span>`:""}</div>
+            ${w.notes?`<div class="n">${esc(w.notes)}</div>`:""}</div>
+            <div class="dur">${fmtMin(workedMinutes(w))}</div></div>`).join("") + `</div>`;
+      }
+      return `<div class="card histcard" data-k="${k}" style="cursor:pointer">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <b style="font-size:14px">${open?"▾":"▸"} ${label(k)}</b>
+          <span style="font-variant-numeric:tabular-nums;font-size:13.5px"><b>${fmtMin(sum)}</b>
+          <span style="color:${diff>=0?"var(--green)":"var(--red)"};margin-left:8px">${diff>=0?"+":""}${fmtMin(diff)}</span></span>
+        </div>${inner}</div>`;
+    }).join("");
+  }
+
   el.innerHTML = clockHtml + targetHtml +
     `<button class="btn sec" id="w_settings" style="margin-bottom:4px">⚙️ Sollzeit einstellen (${mode==="week"?"Woche":"Monat"})</button>` +
-    listHtml;
+    listHtml + histHtml;
+
+  $$(".histcard", el).forEach(c=>c.addEventListener("click", (e)=>{
+    if (e.target.closest(".wt-entry")) return; // Eintrag-Klick = bearbeiten
+    S.wtExpand = (S.wtExpand===c.dataset.k) ? null : c.dataset.k;
+    renderWork();
+  }));
 
   // Events
   if (run){
@@ -970,11 +1006,44 @@ async function fetchWeather(){
   } catch(e){ return null; }
 }
 function askGeo(){
-  if (!navigator.geolocation) return toast("Standort wird nicht unterstützt.", true);
+  if (!navigator.geolocation) return openCityPicker();
   navigator.geolocation.getCurrentPosition(p=>{
-    localStorage.setItem("wopGeo", JSON.stringify({lat:+p.coords.latitude.toFixed(3), lon:+p.coords.longitude.toFixed(3)}));
+    localStorage.setItem("wopGeo", JSON.stringify({lat:+p.coords.latitude.toFixed(3), lon:+p.coords.longitude.toFixed(3), name:"Mein Standort"}));
     weatherCache=null; renderHome();
-  }, ()=>toast("Standort nicht erlaubt – Wetter bleibt aus.", true), {timeout:8000});
+  }, ()=>{ toast("Standort nicht verfügbar – gib stattdessen deinen Ort ein."); openCityPicker(); }, {timeout:8000});
+}
+
+function openCityPicker(){
+  openModal(`
+    <h3>Ort für das Wetter</h3>
+    <label>Stadt / Ort</label>
+    <input id="cp_q" placeholder="z.B. Salzburg" autocomplete="off">
+    <div id="cp_results" style="margin-top:10px"></div>
+    <div style="height:6px"></div>
+    <button class="btn sec" id="cp_search">Suchen</button>
+  `);
+  const doSearch = async ()=>{
+    const q = $("#cp_q").value.trim();
+    if (!q) return;
+    $("#cp_results").innerHTML = `<div class="section-empty">Suche…</div>`;
+    try {
+      const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=6&language=de&format=json`);
+      const d = await r.json();
+      const res = d.results||[];
+      if (!res.length){ $("#cp_results").innerHTML = `<div class="section-empty">Nichts gefunden – anders schreiben?</div>`; return; }
+      $("#cp_results").innerHTML = res.map((c,i)=>
+        `<div class="wt-entry" data-i="${i}"><div><div class="t">${esc(c.name)}</div>
+         <div class="n">${esc([c.admin1,c.country].filter(Boolean).join(", "))}</div></div><div>›</div></div>`).join("");
+      $$("#cp_results .wt-entry").forEach(row=>row.onclick = ()=>{
+        const c = res[+row.dataset.i];
+        localStorage.setItem("wopGeo", JSON.stringify({lat:+c.latitude.toFixed(3), lon:+c.longitude.toFixed(3), name:c.name}));
+        weatherCache=null; closeModal(); renderHome();
+      });
+    } catch(e){ $("#cp_results").innerHTML = `<div class="section-empty">Suche fehlgeschlagen – Internet?</div>`; }
+  };
+  $("#cp_search").onclick = doSearch;
+  $("#cp_q").addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.preventDefault(); doSearch(); } });
+  setTimeout(()=>$("#cp_q").focus(), 100);
 }
 
 function greetingText(){
@@ -1092,10 +1161,13 @@ async function renderHome(){
   const wc = $("#weatherCard");
   const geo = localStorage.getItem("wopGeo");
   if (!geo){
-    wc.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+    wc.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
       <div style="font-size:14px;color:var(--dim)">🌤 Wetter anzeigen?</div>
-      <button class="btn small" id="btnGeo">📍 Standort erlauben</button></div>`;
+      <div style="display:flex;gap:8px">
+        <button class="btn small sec" id="btnGeo">📍 Standort</button>
+        <button class="btn small" id="btnCity">🏙 Ort eingeben</button></div></div>`;
     $("#btnGeo").onclick = askGeo;
+    $("#btnCity").onclick = openCityPicker;
   } else {
     const w = await fetchWeather();
     if (!w || !w.current){ wc.innerHTML = `<div class="section-empty">Wetter gerade nicht verfügbar.</div>`; }
@@ -1104,11 +1176,14 @@ async function renderHome(){
       const dmax = Math.round(w.daily.temperature_2m_max[0]), dmin = Math.round(w.daily.temperature_2m_min[0]);
       const rain = w.daily.precipitation_probability_max[0];
       const [ico2] = WMO[w.daily.weather_code[1]] || ["–"];
+      const locName = (JSON.parse(geo)||{}).name || "";
       wc.innerHTML = `<div class="weather">
         <div class="wico">${ico}</div>
-        <div><div class="wtemp">${Math.round(w.current.temperature_2m)}°</div><div class="wdesc">${txt}</div></div>
+        <div><div class="wtemp">${Math.round(w.current.temperature_2m)}°</div><div class="wdesc">${txt}${locName?" · "+esc(locName):""}</div></div>
         <div class="wmeta">H ${dmax}° · T ${dmin}°<br>☔️ ${rain??0}% · 💨 ${Math.round(w.current.wind_speed_10m)} km/h<br>Morgen: ${ico2} ${Math.round(w.daily.temperature_2m_max[1])}°</div>
-      </div>`;
+      </div>
+      <div style="text-align:right;margin-top:6px"><a style="font-size:11.5px;color:var(--dim2);cursor:pointer" id="wChange">Ort ändern</a></div>`;
+      $("#wChange").onclick = openCityPicker;
     }
   }
 }
