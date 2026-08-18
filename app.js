@@ -863,9 +863,10 @@ function openSettings(){
   const locRows = S.locations.map(l=>`
     <div class="wt-entry" data-id="${l.id}" style="cursor:default">
       <div><div class="t">${esc(l.name)}</div>
-      <div class="n">${l.is_work_location?"💼 Arbeitsort (Tasks buchen Arbeitszeit)":""}</div></div>
+      <div class="n">${[l.is_routine?"🔁 Routine":"", l.is_work_location?"💼 Arbeitsort":""].filter(Boolean).join(" · ")}</div></div>
       <div>
-        <button class="iconbtn" data-act="work" title="Arbeitsort umschalten">💼</button>
+        <button class="iconbtn" data-act="routine" title="Routine umschalten" style="opacity:${l.is_routine?1:.35}">🔁</button>
+        <button class="iconbtn" data-act="work" title="Arbeitsort umschalten" style="opacity:${l.is_work_location?1:.35}">💼</button>
         <button class="iconbtn" data-act="del" title="Löschen">🗑</button>
       </div>
     </div>`).join("");
@@ -898,6 +899,10 @@ function openSettings(){
   };
   $$("#modalBox .wt-entry").forEach(row=>{
     const l = S.locations.find(x=>x.id===row.dataset.id);
+    $("[data-act=routine]",row).onclick = async ()=>{
+      await sb.from("locations").update({is_routine:!l.is_routine}).eq("id",l.id);
+      await loadAll(); openSettings();
+    };
     $("[data-act=work]",row).onclick = async ()=>{
       await sb.from("locations").update({is_work_location:!l.is_work_location}).eq("id",l.id);
       await loadAll(); openSettings();
@@ -1113,10 +1118,14 @@ function homeBlockRows(){
   }).join("");
 }
 
+const routineLocations = () => S.locations.filter(l=>l.is_routine);
+const isRoutineTask = t => routineLocations().some(l=>l.name.toLowerCase()===(t.location||"").toLowerCase());
+
 function homePlanItems(){
   // Heutiger Plan: geplante Aufgaben (mit/ohne Uhrzeit), Fällige, Prioritäten
+  // Routine-Schritte erscheinen in den Routine-Karten, nicht hier
   const items = [];
-  const active = S.tasks.filter(t=>!t.is_archived && isActiveWeekday(t) && startReached(t));
+  const active = S.tasks.filter(t=>!t.is_archived && isActiveWeekday(t) && startReached(t) && !isRoutineTask(t));
   active.forEach(t=>{
     const done = isCompletedToday(t);
     if (t.scheduled_date && isToday(t.scheduled_date)){
@@ -1203,6 +1212,7 @@ async function renderHome(){
       </div>
     </div>
 
+    ${ routineCardsHtml() }
     ${ homeBlockRows() ? `<div class="homehead"><h2>📅 Termine heute</h2><a id="homeToPlan">Zum Plan ›</a></div>
     <div class="card">${homeBlockRows()}</div>` : "" }
     <div class="homehead"><h2>📋 Aufgaben</h2><a id="homeToTasks">Alle Aufgaben ›</a></div>
@@ -1211,6 +1221,7 @@ async function renderHome(){
     ${donePlan.length?`<div class="card" style="opacity:.65">${donePlan.map(planRow).join("")}</div>`:""}
   `;
 
+  $$(".routinecard", el).forEach(c=>c.onclick=()=>openRoutine(c.dataset.loc));
   $("#homeToTasks").onclick = ()=>switchTab("tasks");
   const hp = $("#homeToPlan"); if (hp) hp.onclick = ()=>{ S.planDate=dayKey(new Date()); switchTab("plan"); };
   $$("[data-block]", el).forEach(row=>row.onclick=()=>{
@@ -1569,4 +1580,81 @@ async function sendChat(){
     S.chat.push({ role:"sys", text:"⚠️ "+(e.message||"Verbindung fehlgeschlagen") });
   }
   S.chatBusy = false; renderChat();
+}
+
+// ============================================================
+// Routinen (Orte mit 🔁 – Checkliste, resettet täglich)
+// ============================================================
+function routineMeta(name){
+  const n = name.toLowerCase();
+  if (n.includes("morning")||n.includes("morgen")) return { ico:"🌅", color:"#ff9f43" };
+  if (n.includes("workout")||n.includes("sport"))  return { ico:"🏃", color:"#3ddc84" };
+  if (n.includes("skincare")||n.includes("pflege"))return { ico:"✨", color:"#f48fb1" };
+  if (n.includes("evening")||n.includes("abend"))  return { ico:"🌙", color:"#7986cb" };
+  return { ico:"🔁", color:"#38d4c3" };
+}
+function routineTasksFor(name){
+  const filtered = S.tasks.filter(t => !t.is_archived && isActiveWeekday(t) &&
+    (t.location||"").trim().toLowerCase() === name.trim().toLowerCase());
+  const open = filtered.filter(t=>!isCompletedToday(t)).sort((a,b)=>(a.sort_order-b.sort_order)||a.title.localeCompare(b.title));
+  const done = filtered.filter(isCompletedToday).sort((a,b)=>(a.sort_order-b.sort_order)||a.title.localeCompare(b.title));
+  return open.concat(done);
+}
+
+function routineCardsHtml(){
+  const locs = routineLocations();
+  if (!locs.length) return "";
+  const cards = locs.map(l=>{
+    const tasks = routineTasksFor(l.name);
+    if (!tasks.length) return "";
+    const done = tasks.filter(isCompletedToday).length;
+    const all = done===tasks.length;
+    const m = routineMeta(l.name);
+    return `<div class="card routinecard" data-loc="${esc(l.name)}" style="margin:0;cursor:pointer;border-left:4px solid ${m.color}">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <b style="font-size:14px">${m.ico} ${esc(l.name)}</b>
+        <span style="font-size:12.5px;font-weight:800;color:${all?"var(--green)":m.color}">${all?"✓ fertig":done+"/"+tasks.length}</span>
+      </div>
+      <div class="subprog" style="margin-top:9px"><div style="width:${tasks.length?100*done/tasks.length:0}%;background:${m.color}"></div></div>
+    </div>`;
+  }).filter(Boolean);
+  if (!cards.length) return "";
+  return `<div class="homehead"><h2>🔁 Routinen</h2></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:4px">${cards.join("")}</div>`;
+}
+
+function openRoutine(name){
+  const tasks = routineTasksFor(name);
+  const m = routineMeta(name);
+  const done = tasks.filter(isCompletedToday).length;
+  const all = tasks.length && done===tasks.length;
+  const rows = tasks.map(t=>{
+    const d = isCompletedToday(t);
+    const eff = effCompletedToday(t);
+    return `<div class="subrow ${d?"on":""}" data-id="${t.id}" style="padding:10px 0;font-size:15px;border-bottom:1px solid var(--line)">
+      <span class="box" style="width:24px;height:24px;min-width:24px;border-radius:50%;font-size:13px">✓</span>
+      <span style="flex:1">${esc(t.title)}</span>
+      <span style="font-size:12px;color:var(--dim)">${t.repeat_count>1?`${eff}/${t.repeat_count}× · `:""}${fmtMin(t.duration_minutes)}</span>
+    </div>`;
+  }).join("");
+  openModal(`
+    <h3>${m.ico} ${esc(name)}</h3>
+    ${ all ? `<div class="msg ok" style="display:block;text-align:center">🎉 Alles erledigt – stark!</div>`
+      : `<div style="display:flex;align-items:center;gap:10px;margin-top:6px">
+          <span style="font-size:13px;color:var(--dim)">${done} von ${tasks.length}</span>
+          <div class="subprog" style="flex:1;margin:0"><div style="width:${tasks.length?100*done/tasks.length:0}%;background:${m.color}"></div></div>
+        </div>` }
+    <div style="margin-top:10px">${rows || `<div class="section-empty">Keine Schritte – lege Aufgaben mit Ort „${esc(name)}" an.</div>`}</div>
+    <div style="height:14px"></div>
+    <button class="btn sec" id="rt_add">+ Schritt hinzufügen</button>
+  `);
+  $$("#modalBox .subrow").forEach(row=>{
+    row.onclick = async ()=>{
+      const t = S.tasks.find(x=>x.id===row.dataset.id);
+      if (!t) return;
+      if (isCompletedToday(t)) await uncompleteToday(t); else await completeTask(t);
+      openRoutine(name); // Ansicht aktualisieren
+    };
+  });
+  $("#rt_add").onclick = ()=>{ closeModal(); S.locFilter=name; openTaskForm(null); };
 }
