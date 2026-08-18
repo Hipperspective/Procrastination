@@ -819,9 +819,21 @@ function openSettings(){
     <div class="card" style="margin-top:4px">${locRows||"<div class='section-empty'>Keine Orte.</div>"}</div>
     <div class="mrow"><input id="s_newloc" placeholder="Neuer Ort…"><button class="btn small sec" id="s_addloc" style="width:auto">+</button></div>
     <div style="height:20px"></div>
+    <label>Daten</label>
+    <button class="btn sec" id="s_import">📥 iOS-Backup importieren (.json)</button>
+    <input type="file" id="s_importfile" accept=".json,application/json" class="hidden">
+    <div style="height:20px"></div>
     <div class="card" style="font-size:13px;color:var(--dim)">Angemeldet als <b style="color:var(--text)">${esc(S.user.email)}</b></div>
     <button class="btn danger" id="s_logout">Abmelden</button>
   `);
+  $("#s_import").onclick = ()=>$("#s_importfile").click();
+  $("#s_importfile").onchange = async (e)=>{
+    const file = e.target.files[0]; if(!file) return;
+    try {
+      const json = JSON.parse(await file.text());
+      await importBackup(json);
+    } catch(err){ toast("Import fehlgeschlagen: "+err.message, true); }
+  };
   $$("#modalBox .wt-entry").forEach(row=>{
     const l = S.locations.find(x=>x.id===row.dataset.id);
     $("[data-act=work]",row).onclick = async ()=>{
@@ -840,4 +852,92 @@ function openSettings(){
     await loadAll(); openSettings();
   };
   $("#s_logout").onclick = async ()=>{ await sb.auth.signOut(); };
+}
+
+// ============================================================
+// Import: Backup der iOS-App (BackupManager, Format v3/v4)
+// ============================================================
+function mapBackup(json){
+  if (!json || !Array.isArray(json.tasks)) throw new Error("Das ist kein gültiges Backup der iOS-App.");
+  const parseRaw = v => { if (Array.isArray(v)) return v;
+    try { return JSON.parse(v||"[]"); } catch(e){ return []; } };
+  const kindMap = { "One-off":"oneOff", "Recurring":"recurring" };
+  const recMap = { "Daily":"daily", "Weekly":"weekly", "Custom (days)":"customDays" };
+  const lc = id => id ? String(id).toLowerCase() : null;
+
+  const locations = (json.locations||[]).map((l,i)=>({
+    id: lc(l.id), name: l.name,
+    is_routine: !!l.isRoutine, is_work_location: !!l.isWorkLocation, sort_order: i,
+  }));
+
+  const tasks = (json.tasks||[]).map(t=>({
+    id: lc(t.id),
+    title: t.title || "(ohne Titel)",
+    duration_minutes: Math.max(1, t.durationMinutes||15),
+    location: t.location || "",
+    kind: kindMap[t.kindRaw] || "oneOff",
+    recurrence: recMap[t.recurrenceRaw] || "daily",
+    custom_recurrence_days: Math.max(1, t.customRecurrenceDays||2),
+    is_priority: !!t.isPriority,
+    due_date: t.dueDate || null,
+    scheduled_date: t.scheduledDate || null,
+    has_scheduled_time: !!t.hasScheduledTime,
+    repeat_count: Math.max(1, t.repeatCount||1),
+    completed_today_count: t.completedTodayCount||0,
+    last_completed_count_reset: t.lastCompletedCountResetDate || null,
+    repeat_cooldown_minutes: t.repeatCooldownMinutes||0,
+    last_repeat_completed_at: t.lastRepeatCompletedAt || null,
+    tags: parseRaw(t.tagsRaw),
+    subtasks: parseRaw(t.subtasksRaw).map(s=>({ id: lc(s.id)||uid(), title: s.title, done: !!s.isCompleted })),
+    notes: t.notes || "",
+    dependency_task_id: lc(t.dependencyTaskId),
+    start_date: t.startDate || null,
+    active_weekdays: parseRaw(t.activeWeekdaysRaw),
+    sort_order: t.sortOrder||0,
+    created_at: t.createdAt || new Date().toISOString(),
+    last_done_at: t.lastDoneAt || null,
+    is_archived: !!t.isArchived,
+  }));
+
+  const work_entries = (json.workTimeEntries||[]).map(w=>({
+    id: lc(w.id),
+    start_time: w.startTime,
+    end_time: w.endTime || null,
+    break_minutes: w.breakMinutes||0,
+    notes: w.notes || "",
+  })).filter(w=>w.start_time);
+
+  const settings = [];
+  const s = json.settings||{};
+  if (s.workTimeTargetMode) settings.push({ key:"workTargetMode", value:s.workTimeTargetMode });
+  if (s.weeklyTargetWorkMinutes) settings.push({ key:"weeklyTargetMinutes", value:s.weeklyTargetWorkMinutes });
+  if (s.monthlyTargetWorkMinutes) settings.push({ key:"monthlyTargetMinutes", value:s.monthlyTargetWorkMinutes });
+
+  return { locations, tasks, work_entries, settings };
+}
+
+async function importBackup(json){
+  const m = mapBackup(json);
+  toast("Importiere…");
+
+  // Orte: nur die einfügen, die es (nach Name) noch nicht gibt
+  const haveNames = new Set(S.locations.map(l=>l.name.toLowerCase()));
+  const newLocs = m.locations.filter(l=>!haveNames.has(l.name.toLowerCase()));
+
+  const results = [];
+  if (newLocs.length)
+    results.push(await sb.from("locations").upsert(newLocs, { onConflict:"id", ignoreDuplicates:true }));
+  if (m.tasks.length)
+    results.push(await sb.from("tasks").upsert(m.tasks, { onConflict:"id", ignoreDuplicates:true }));
+  if (m.work_entries.length)
+    results.push(await sb.from("work_entries").upsert(m.work_entries, { onConflict:"id", ignoreDuplicates:true }));
+  for (const st of m.settings)
+    results.push(await sb.from("settings").upsert({ user_id:S.user.id, key:st.key, value:st.value }));
+
+  const err = results.find(r=>r && r.error);
+  if (err) { toast("Import-Fehler: "+err.error.message, true); return; }
+
+  closeModal();
+  toast(`✓ Import fertig: ${m.tasks.length} Aufgaben, ${newLocs.length} neue Orte, ${m.work_entries.length} Arbeitszeiten`);
+  loadAll();
 }
