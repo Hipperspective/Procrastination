@@ -423,21 +423,23 @@ function renderTasks(){
     html += section("🔥 Jetzt fällig", dueNow);
   }
   if (S.locFilter==="ALLE"){
-    // Nach Ort/Kategorie gruppieren (Reihenfolge wie in den Einstellungen)
+    // Nach Ort/Kategorie gruppieren – auf breiten Screens als Spalten nebeneinander
     const palette = LOC_PALETTE;
     const locSection = (name, color, arr) => {
       if (!arr.length) return "";
       const collapsed = S.collapsed.has(name);
-      return `<div class="locsec" data-sec="${esc(name)}" role="button" tabindex="0">
+      return `<div class="taskcol"><div class="locsec" data-sec="${esc(name)}" role="button" tabindex="0">
         <span class="dot" style="background:${color}"></span>
         <h2>${esc(name)}</h2><span class="cnt">${arr.length}</span><span class="arr">${collapsed?"▸":"▾"}</span></div>`
-        + (collapsed ? "" : arr.map(taskRow).join(""));
+        + (collapsed ? "" : arr.map(taskRow).join("")) + `</div>`;
     };
+    let cols = "";
     S.locations.forEach((l,i)=>{
-      html += locSection(l.name, palette[i%palette.length], openRest.filter(t=>(t.location||"")===l.name));
+      cols += locSection(l.name, palette[i%palette.length], openRest.filter(t=>(t.location||"")===l.name));
     });
     const noLoc = openRest.filter(t=>!S.locations.some(l=>l.name===(t.location||"")));
-    html += locSection("Sonstiges", "#5c6579", noLoc);
+    cols += locSection("Sonstiges", "#5c6579", noLoc);
+    html += `<div class="taskcols">${cols}</div>`;
   } else {
     html += section("Offen", openRest);
   }
@@ -559,7 +561,8 @@ function startApp(){
   const sIn = $("#searchTasks");
   if (sIn) sIn.oninput = ()=>{ S.search = sIn.value; renderTasks(); };
   $("#fab").onclick = ()=>{ if(S.tab==="work") openWorkEntryForm(null); else if(S.tab==="plan") openBlockForm(null); else openTaskForm(null); };
-  $("#btnChat").onclick = openChat;
+  $("#btnChat").onclick = ()=>{ switchTab("home");
+    setTimeout(()=>{ const c=$("#homeChat"); if(c){ c.scrollIntoView({behavior:"smooth",block:"center"}); const i=$("#chatIn"); if(i) i.focus(); } }, 150); };
   $("#btnSettings").onclick = openSettings;
   initRealtime();
   loadAll().then(()=>{ if (getFocus()) showFocus(); });
@@ -713,6 +716,12 @@ async function serverOpenEntry(){
   return (data && data[0]) || null;
 }
 
+// ---- Abwesenheiten (Urlaub/Krank/Feiertag): zählen als Soll-Gutschrift ----
+function getAbsences(){ const a = getSetting("absences", []); return Array.isArray(a) ? a : []; }
+async function saveAbsences(list){ await saveSetting("absences", list); }
+function absDayMinutesDefault(){ return Math.round(getSetting("weeklyTargetMinutes",2310)/5); }
+const ABS_LABEL = { urlaub:"🏖 Urlaub", krank:"🤒 Krank", feiertag:"🎉 Feiertag" };
+
 function workedMinutes(w, ref){
   ref = ref || new Date();
   const end = w.end_time ? new Date(w.end_time) : ref;
@@ -743,9 +752,17 @@ function renderWork(){
   const thisPeriod = S.workEntries.filter(w => periodKeyOf(w.start_time, mode)===curKey);
   const workedThis = thisPeriod.reduce((a,w)=>a+workedMinutes(w), 0);
 
-  // Überstunden-Saldo: abgeschlossene Perioden (ohne aktuelle)
+  // Abwesenheiten: Urlaub/Krank/Feiertag zählen als Gutschrift aufs Soll
+  const absAll = getAbsences();
+  const absThisList = absAll.filter(a=>periodKeyOf(a.date+"T12:00:00", mode)===curKey)
+    .sort((a,b)=> a.date<b.date ? 1 : -1);
+  const absCreditThis = absThisList.reduce((a,x)=>a+(x.min||0), 0);
+  const totalThis = workedThis + absCreditThis;
+
+  // Überstunden-Saldo: abgeschlossene Perioden (ohne aktuelle), inkl. Abwesenheits-Gutschriften
   const byPeriod = {};
   closed.forEach(w=>{ const k=periodKeyOf(w.start_time, mode); if(k!==curKey) byPeriod[k]=(byPeriod[k]||0)+workedMinutes(w); });
+  absAll.forEach(a=>{ const k=periodKeyOf(a.date+"T12:00:00", mode); if(k!==curKey) byPeriod[k]=(byPeriod[k]||0)+(a.min||0); });
   const balance = Object.values(byPeriod).reduce((a,v)=>a+(v-target), 0);
 
   // Stempeluhr-Anzeige
@@ -766,19 +783,30 @@ function renderWork(){
       <div class="clockbtns"><button class="btn" id="w_in" style="background:var(--green);color:#08351d">▶️ Einstempeln</button></div></div>`;
   }
 
-  // Zielfortschritt
-  const pct = target>0 ? Math.min(100, 100*workedThis/target) : 0;
-  const over = workedThis>=target;
+  // Zielfortschritt (inkl. Abwesenheits-Gutschrift)
+  const pct = target>0 ? Math.min(100, 100*totalThis/target) : 0;
+  const over = totalThis>=target;
   const periodLabel = mode==="week" ? "Diese Woche" : "Dieser Monat";
   const targetHtml = `<div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center">
       <b>${periodLabel}</b>
-      <span style="font-variant-numeric:tabular-nums">${fmtMin(workedThis)} / ${fmtMin(target)}</span></div>
+      <span style="font-variant-numeric:tabular-nums">${fmtMin(totalThis)} / ${fmtMin(target)}${absCreditThis?` <span style="color:var(--dim);font-size:11.5px">(inkl. 🏖 ${fmtMin(absCreditThis)})</span>`:""}</span></div>
     <div class="progressbar"><div class="${over?"over":""}" style="width:${pct}%"></div></div>
     <div style="display:flex;justify-content:space-between;font-size:12.5px;color:var(--dim)">
-      <span>${over?`🎉 +${fmtMin(workedThis-target)} über Soll`:`Noch ${fmtMin(target-workedThis)}`}</span>
+      <span>${over?`🎉 +${fmtMin(totalThis-target)} über Soll`:`Noch ${fmtMin(target-totalThis)}`}</span>
       <span>Saldo: <b style="color:${balance>=0?"var(--green)":"var(--red)"}">${balance>=0?"+":""}${fmtMin(balance)}</b></span>
     </div></div>`;
+
+  // Abwesenheiten-Karte für die aktuelle Periode
+  const absRow = a => `<div class="wt-entry" style="cursor:default">
+    <div><div class="t">${ABS_LABEL[a.kind]||"🏖 Urlaub"} · ${fmtDateShort(new Date(a.date+"T12:00:00"))}</div></div>
+    <div style="display:flex;align-items:center;gap:6px"><span class="dur" style="color:var(--green)">+${fmtMin(a.min||0)}</span>
+    <button class="abs-del" data-id="${a.id}" style="background:none;border:none;color:var(--dim);font-size:15px;cursor:pointer;padding:2px 6px" aria-label="Abwesenheit löschen">✕</button></div></div>`;
+  const absCardHtml = absThisList.length ? `<div class="card">
+    <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+      <b style="font-size:13.5px">Abwesenheiten · ${periodLabel}</b>
+      <b style="font-size:13.5px;color:var(--green)">+${fmtMin(absCreditThis)}</b></div>
+    ${absThisList.map(absRow).join("")}</div>` : "";
 
   // Einträge dieser Periode, gruppiert nach Tag
   const groups = {};
@@ -813,7 +841,10 @@ function renderWork(){
       if (open){
         const arr = closed.filter(w=>periodKeyOf(w.start_time,mode)===k)
           .sort((a,b)=>new Date(b.start_time)-new Date(a.start_time));
+        const absHere = absAll.filter(a=>periodKeyOf(a.date+"T12:00:00",mode)===k)
+          .sort((a,b)=> a.date<b.date ? 1 : -1);
         inner = `<div style="margin-top:8px;border-top:1px solid var(--line);padding-top:4px">` +
+          absHere.map(absRow).join("") +
           arr.map(w=>`<div class="wt-entry" data-id="${w.id}" role="button" tabindex="0">
             <div><div class="t">${fmtDateShort(new Date(w.start_time))} · ${fmtTime(new Date(w.start_time))}–${fmtTime(new Date(w.end_time))}${w.break_minutes?` <span class="n">(P: ${fmtMin(w.break_minutes)})</span>`:""}</div>
             ${w.notes?`<div class="n">${esc(w.notes)}</div>`:""}</div>
@@ -828,9 +859,17 @@ function renderWork(){
     }).join("");
   }
 
-  el.innerHTML = clockHtml + targetHtml +
-    `<button class="btn sec" id="w_settings" style="margin-bottom:4px">⚙️ Sollzeit einstellen (${mode==="week"?"Woche":"Monat"})</button>` +
+  el.innerHTML = clockHtml + targetHtml + absCardHtml +
+    `<div style="display:flex;gap:8px;margin-bottom:4px">
+      <button class="btn sec" id="w_settings" style="flex:1">⚙️ Sollzeit (${mode==="week"?"Woche":"Monat"})</button>
+      <button class="btn sec" id="w_abs" style="flex:1">🏖 Urlaub eintragen</button></div>` +
     listHtml + histHtml;
+
+  $("#w_abs").onclick = openAbsenceForm;
+  $$(".abs-del", el).forEach(b=>armDelete(b, async ()=>{
+    await saveAbsences(getAbsences().filter(a=>a.id!==b.dataset.id));
+    toast("Gelöscht"); renderWork();
+  }));
 
   $$(".histcard", el).forEach(c=>c.addEventListener("click", (e)=>{
     if (e.target.closest(".wt-entry")) return; // Eintrag-Klick = bearbeiten
@@ -938,6 +977,52 @@ function openWorkSettings(){
     await saveSetting("weeklyTargetMinutes", Math.round((+$("#ws_week").value||38.5)*60));
     await saveSetting("monthlyTargetMinutes", Math.round((+$("#ws_month").value||80)*60));
     closeModal(); renderWork(); toast("Gespeichert");
+  };
+}
+
+function openAbsenceForm(){
+  const defH = (absDayMinutesDefault()/60).toFixed(1);
+  const today = dayKey(new Date());
+  openModal(`
+    <h3>🏖 Abwesenheit eintragen</h3>
+    <label>Art</label>
+    <div class="seg" id="ab_kind">
+      <button data-v="urlaub" class="active">🏖 Urlaub</button>
+      <button data-v="krank">🤒 Krank</button>
+      <button data-v="feiertag">🎉 Feiertag</button>
+    </div>
+    <label>Von</label><input type="date" id="ab_from" value="${today}">
+    <label>Bis (leer = nur ein Tag)</label><input type="date" id="ab_to" value="">
+    <label>Gutschrift pro Tag (Stunden)</label><input type="number" step="0.5" min="0" id="ab_hours" value="${defH}">
+    <label style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer">
+      <input type="checkbox" id="ab_wd" checked style="width:auto;margin:0"> Nur Werktage (Mo–Fr)</label>
+    <div style="height:18px"></div>
+    <button class="btn" id="ab_save">Eintragen</button>
+    <div style="font-size:12px;color:var(--dim);margin-top:10px">Jeder Tag zählt als Gutschrift aufs Soll – so rutscht der Saldo im Urlaub nicht ins Minus.</div>
+  `);
+  let kind = "urlaub";
+  $$("#ab_kind button").forEach(b=>b.onclick=()=>{ kind=b.dataset.v;
+    $$("#ab_kind button").forEach(x=>x.classList.toggle("active", x===b)); });
+  $("#ab_save").onclick = async ()=>{
+    const from = $("#ab_from").value; if(!from) return toast("Bitte Datum wählen.", true);
+    const to = $("#ab_to").value || from;
+    if (to < from) return toast("„Bis“ liegt vor „Von“.", true);
+    const min = Math.round((+$("#ab_hours").value||0)*60);
+    if (!min) return toast("Stunden pro Tag fehlen.", true);
+    const wdOnly = $("#ab_wd").checked;
+    const list = getAbsences().slice();
+    let n = 0;
+    const d = new Date(from+"T12:00:00"), end = new Date(to+"T12:00:00");
+    while (d <= end && n < 400){
+      const k = dayKey(d), dow = d.getDay();
+      if ((!wdOnly || (dow>=1 && dow<=5)) && !list.some(a=>a.date===k)){
+        list.push({ id:crypto.randomUUID(), date:k, kind, min }); n++;
+      }
+      d.setDate(d.getDate()+1);
+    }
+    await saveAbsences(list);
+    closeModal(); toast(n ? `${n} Tag${n>1?"e":""} eingetragen ✓` : "Keine neuen Tage (schon eingetragen?)");
+    renderWork();
   };
 }
 
@@ -1398,10 +1483,11 @@ async function renderHome(){
 
   el.innerHTML = `
     <div class="home-left">
-      <div class="card" id="weekWeather"><b style="font-size:13.5px">🌤 Wetter-Woche</b><div class="section-empty">lädt…</div></div>
-      ${plannedCardHtml()}
+      <div class="m-sec m-ww"><div class="card" id="weekWeather"><b style="font-size:13.5px">🌤 Wetter-Woche</b><div class="section-empty">lädt…</div></div></div>
+      <div class="m-sec m-planned">${plannedCardHtml()}</div>
     </div>
     <div class="home-main">
+    <div class="m-sec m-hero">
     <div class="hero">
       <div class="greet">${greetingText()}, Finn! 👋</div>
       <div class="date">${dateStr}</div>
@@ -1409,10 +1495,11 @@ async function renderHome(){
       ${xpLineHtml()}
     </div>
     ${frogCardHtml()}
+    </div>
 
-    <div class="card" id="weatherCard"><div class="section-empty">Wetter lädt…</div></div>
+    <div class="m-sec m-weather"><div class="card" id="weatherCard"><div class="section-empty">Wetter lädt…</div></div></div>
 
-    <div class="homegrid">
+    <div class="m-sec m-stats"><div class="homegrid">
       <div class="card ringwrap" style="margin:0">
         <div class="ring">
           <svg width="74" height="74"><circle cx="37" cy="37" r="${r}" fill="none" stroke="var(--line)" stroke-width="7"/>
@@ -1429,11 +1516,12 @@ async function renderHome(){
         <div style="font-size:12px;color:${run?"var(--green)":"var(--dim)"};margin-top:2px">
           ${run?(run.break_started_at?"⏸ Pause läuft":"🟢 läuft seit "+fmtTime(new Date(run.start_time))):(todayWork?"heute gearbeitet":"nicht eingestempelt")}</div>
       </div>
-    </div>
+    </div></div>
 
-    ${ routineCardsHtml() }
-    ${ homeBlockRows() ? `<div class="homehead"><h2>📅 Termine heute</h2><a id="homeToPlan">Zum Plan ›</a></div>
-    <div class="card">${homeBlockRows()}</div>` : "" }
+    <div class="m-sec m-rout">${ routineCardsHtml() }</div>
+    <div class="m-sec m-blocks">${ homeBlockRows() ? `<div class="homehead"><h2>📅 Termine heute</h2><a id="homeToPlan">Zum Plan ›</a></div>
+    <div class="card">${homeBlockRows()}</div>` : "" }</div>
+    <div class="m-sec m-next">
     <div class="homehead"><h2>📋 Als Nächstes</h2><div style="display:flex;align-items:center;gap:12px">
       <select id="homeCatFilter" style="width:auto;padding:5px 8px;font-size:12.5px;border-radius:9px">
         <option value="">Alle Kategorien</option>
@@ -1446,8 +1534,14 @@ async function renderHome(){
     <button class="btn sec" id="planTomorrow" style="margin-top:2px">🌙 Morgen planen</button>
     ${donePlan.length?`<div class="card" style="opacity:.65;margin-top:10px">${donePlan.map(planRow).join("")}</div>`:""}
     </div>
-    <div class="home-side">${todoPanelHtml()}${postitHtml()}</div>
+    </div>
+    <div class="home-side">
+      <div class="m-sec m-todo">${todoPanelHtml()}</div>
+      <div class="m-sec m-post">${postitHtml()}</div>
+      <div class="m-sec m-chat">${homeChatHtml()}</div>
+    </div>
   `;
+  wireHomeChat(el);
   wireTodoPanel(el);
   wirePostit(el);
   fillWeekWeather();
@@ -1581,8 +1675,8 @@ function renderPlan(){
         ${t.ico} ${esc(b.title||t.label)} <span style="font-weight:500;opacity:.65;font-size:11.5px">ganztägig</span></div>`;
     }).join("") + `</div>`;
   }
-  // Timeline 05–24 Uhr (Blöcke davor werden geklemmt), 1h = 44px
-  const H0=5, PXH=44, top = m => Math.max(0,(m/60-H0))*PXH;
+  // Timeline 05–24 Uhr (Blöcke davor werden geklemmt)
+  const H0=5, PXH=34, top = m => Math.max(0,(m/60-H0))*PXH;
   let tl = `<div class="timeline" style="height:${(24-H0)*PXH+10}px">`;
   for (let h=H0; h<=24; h++)
     tl += `<div class="tl-hour" style="top:${(h-H0)*PXH}px"><span>${pad(h%24)}:00</span></div>`;
@@ -1605,7 +1699,7 @@ function renderPlan(){
 
   el.innerHTML = `<div class="plan-day">` + nav + strip + banner + tl + empty + `<div style="height:8px"></div></div>`
     + `<div class="plan-week card">${planWeekHtml()}</div>`
-    + `<div class="plan-month card">${planMonthHtml()}</div>`;
+    + `<div class="plan-month"><div class="card">${planMonthHtml()}</div><div class="card">${planUpcomingHtml()}</div></div>`;
   wirePlanPanels(el);
 
   $$(".weekstrip button", el).forEach(b=>b.onclick=()=>{ S.planDate=b.dataset.d; renderPlan(); });
@@ -1725,6 +1819,13 @@ const AI_TOOLS = [
       start:{type:"string",description:"HH:MM"}, end:{type:"string",description:"HH:MM"},
       break_minutes:{type:"integer"}, notes:{type:"string"},
     }, required:["date","start","end"] } } },
+  { type:"function", function:{ name:"add_absence",
+    description:"Urlaub, Krankstand oder Feiertag eintragen – Werktage zählen als Soll-Gutschrift bei der Arbeitszeit",
+    parameters:{ type:"object", properties:{
+      start_date:{type:"string",description:"YYYY-MM-DD"},
+      end_date:{type:"string",description:"YYYY-MM-DD, leer = nur ein Tag"},
+      kind:{type:"string",enum:["urlaub","krank","feiertag"]},
+    }, required:["start_date"] } } },
   { type:"function", function:{ name:"complete_task",
     description:"Eine Aufgabe als erledigt abhaken (per Titel, unscharfe Suche)",
     parameters:{ type:"object", properties:{ title:{type:"string"} }, required:["title"] } } },
@@ -1749,6 +1850,7 @@ Relative Datumsangaben ("morgen", "Freitag") immer in konkrete Daten umrechnen. 
 ERINNERUNGEN ("erinnere mich am X um Y an Z"): create_task mit scheduled_date + scheduled_time und is_priority=true. Die App blendet sie automatisch erst ab dem Vortag ein und schickt zur Uhrzeit eine Push-Nachricht.
 KORREKTUREN: Wenn sich eine Nachricht auf einen gerade angelegten/besprochenen Eintrag bezieht ("bis 23 Uhr", "doch ohne Uhrzeit", "verschieb auf Montag"), IMMER update_appointment/update_task verwenden – NIE einen zweiten Eintrag anlegen.
 Termin ohne Uhrzeit ("nur Hinweis, dass er kommt"): create_appointment OHNE start/end -> ganztägig.
+URLAUB/KRANK ("ich bin nächste Woche auf Urlaub", "war gestern krank"): add_absence – Werktage zählen automatisch als Arbeitszeit-Gutschrift.
 Verfügbare Orte/Listen: ${S.locations.map(l=>l.name).join(", ")}. Wenn kein Ort passt, nimm "To-Do".
 Antworte kurz, freundlich, auf Deutsch. Fasse nach Tool-Aufrufen knapp zusammen, was du angelegt hast.
 
@@ -1839,6 +1941,21 @@ async function aiExecTool(name, args){
         break_minutes:args.break_minutes||0, notes:args.notes||"" });
       if (error) throw error;
       return { ok:true, info:`Arbeitszeit ${args.date} ${args.start}–${args.end} eingetragen` };
+    }
+    if (name==="add_absence"){
+      const from = args.start_date, to = args.end_date || args.start_date;
+      const min = absDayMinutesDefault();
+      const list = getAbsences().slice(); let n = 0;
+      const d = new Date(from+"T12:00:00"), end = new Date(to+"T12:00:00");
+      while (d <= end && n < 400){
+        const k = dayKey(d), dow = d.getDay();
+        if (dow>=1 && dow<=5 && !list.some(a=>a.date===k)){
+          list.push({ id:crypto.randomUUID(), date:k, kind:args.kind||"urlaub", min }); n++;
+        }
+        d.setDate(d.getDate()+1);
+      }
+      await saveAbsences(list);
+      return { ok:true, info:`${n} Abwesenheitstag${n!==1?"e":""} (${args.kind||"urlaub"}) eingetragen: ${from}${to!==from?" bis "+to:""}` };
     }
     if (name==="complete_task"){
       const q = (args.title||"").toLowerCase();
@@ -2860,20 +2977,30 @@ function wirePlannedCard(root){
 function planWeekHtml(){
   const sel = new Date(S.planDate+"T12:00:00");
   const mon = new Date(sel); mon.setDate(mon.getDate() - ((mon.getDay()+6)%7));
-  const H0 = 6, H1 = 23, PXH = 30;
+  const H0 = 5, H1 = 24, PXH = 34;
   const height = (H1-H0)*PXH;
   const top = m => Math.max(0, Math.min(height, (m/60-H0)*PXH));
   const todayKey = dayKey(new Date());
 
-  let head = `<div class="wk-head">`;
-  let cols = `<div class="wk-grid">`;
+  let head = `<div class="wk-head" style="grid-template-columns:34px repeat(7,1fr)"><div></div>`;
+  let cols = `<div class="wk-grid" style="grid-template-columns:34px repeat(7,1fr)">`;
+  // Stunden-Spalte
+  let gutter = `<div style="position:relative;height:${height}px">`;
+  for (let hh=H0+1; hh<H1; hh++)
+    gutter += `<div style="position:absolute;top:${(hh-H0)*PXH-7}px;right:4px;font-size:9.5px;color:var(--dim2)">${pad(hh)}</div>`;
+  gutter += `</div>`;
+  cols += gutter;
   for (let i=0;i<7;i++){
     const d = new Date(mon); d.setDate(d.getDate()+i);
     const dk = dayKey(d);
     head += `<button data-wd="${dk}" class="${dk===S.planDate?"sel":""} ${dk===todayKey?"today":""}">
       <span>${WEEKDAYS_DE[d.getDay()]}</span><b>${d.getDate()}</b></button>`;
     let col = `<div class="wk-col" data-wcol="${dk}" style="height:${height}px">`;
-    for (let hh=H0+2; hh<H1; hh+=2) col += `<div class="wk-hline" style="top:${(hh-H0)*PXH}px"></div>`;
+    for (let hh=H0+1; hh<H1; hh++) col += `<div class="wk-hline" style="top:${(hh-H0)*PXH}px;${hh%2?"opacity:.5;":""}"></div>`;
+    if (dk===todayKey){
+      const nowM = new Date().getHours()*60+new Date().getMinutes();
+      if (nowM>=H0*60) col += `<div style="position:absolute;left:0;right:0;top:${top(nowM)}px;border-top:1.5px solid var(--red);z-index:5"></div>`;
+    }
     blocksFor(dk).forEach(b=>{
       const bAllDay = b.start_min<=0 && (b.end_min>=1439 || b.end_min<=60);
       if (bAllDay && b.type!=="sleep"){
@@ -2929,6 +3056,9 @@ function planMonthHtml(){
 }
 
 function wirePlanPanels(el){
+  $$("[data-pblock]", el).forEach(r=>r.onclick = ()=>{
+    const b = S.timeBlocks.find(x=>x.id===r.dataset.pblock); if (b) openBlockForm(b);
+  });
   $$("[data-wd]", el).forEach(b=>b.onclick = ()=>{ S.planDate = b.dataset.wd; renderPlan(); });
   $$("[data-wb]", el).forEach(x=>x.onclick = ()=>{
     const b = S.timeBlocks.find(y=>y.id===x.dataset.wb); if (b) openBlockForm(b);
@@ -2940,4 +3070,62 @@ function wirePlanPanels(el){
     d.setMonth(d.getMonth() + parseInt(b.dataset.mnav));
     S.planDate = dayKey(d); renderPlan();
   });
+}
+
+// Rechte Plan-Spalte: die nächsten Termine (14 Tage)
+function planUpcomingHtml(){
+  const items = [];
+  for (let i=0;i<14 && items.length<8;i++){
+    const d = new Date(); d.setDate(d.getDate()+i);
+    const dk = dayKey(d);
+    blocksFor(dk).filter(b=>b.type!=="sleep").forEach(b=>{
+      if (items.length<8) items.push({ d:new Date(d), dk, b });
+    });
+  }
+  if (!items.length) return `<b style="font-size:13.5px">🔜 Demnächst</b>
+    <div class="section-empty" style="padding:8px 0 2px">Nichts geplant in den nächsten 2 Wochen.</div>`;
+  const rows = items.map(({d,dk,b})=>{
+    const c = blockColor(b);
+    const t = BLOCK_TYPES[b.type]||BLOCK_TYPES.event;
+    const bAllDay = b.start_min<=0 && (b.end_min>=1439 || b.end_min<=60);
+    const when = dk===dayKey(new Date()) ? "Heute" : WEEKDAYS_DE[d.getDay()]+" "+d.getDate()+".";
+    return `<div class="planrow" data-pblock="${b.id}" role="button" tabindex="0" style="padding:7px 0">
+      <span class="ptime" style="min-width:52px;font-size:11px">${when}</span>
+      <span style="width:8px;height:8px;min-width:8px;border-radius:50%;background:${c}"></span>
+      <span class="pt" style="font-size:13px">${esc(b.title||t.label)}</span>
+      <span class="pm">${bAllDay?"ganztägig":minToHM(b.start_min)}</span>
+    </div>`;
+  }).join("");
+  return `<b style="font-size:13.5px">🔜 Demnächst</b><div style="margin-top:4px">${rows}</div>`;
+}
+
+// ============================================================
+// 💬 Chat als feste Karte am Home
+// ============================================================
+function homeChatHtml(){
+  return `<div class="card" id="homeChat" style="border-left:4px solid var(--purple)">
+    <b style="font-size:13.5px">💬 Assistent</b>
+    <div class="chatlog" id="chatLog" style="height:auto;max-height:300px;min-height:60px;margin-top:8px"></div>
+    <div class="chatinput" style="margin-top:8px">
+      <button id="chatMic" style="background:var(--card2);color:var(--text)" title="Sprechen" aria-label="Sprechen">🎤</button>
+      <input id="chatIn" placeholder="z.B. Freitag 14 Uhr Zahnarzt…" autocomplete="off">
+      <button id="chatSend" aria-label="Senden">➤</button>
+    </div>
+  </div>`;
+}
+function wireHomeChat(root){
+  const card = $("#homeChat", root); if (!card) return;
+  if (!localStorage.getItem("wopAiKey")){
+    $("#chatLog", card).innerHTML = `<div class="cmsg sys">Der Assistent braucht einmalig deinen OpenAI API-Key.</div>
+      <button class="btn small" id="chatKeyBtn" style="align-self:flex-start;margin-top:6px">🔑 Key hinterlegen</button>`;
+    const kb = $("#chatKeyBtn", card);
+    if (kb) kb.onclick = ()=>{ openSettings();
+      setTimeout(()=>{ const k=$("#s_aikey"); if(k){ k.scrollIntoView({block:"center"}); k.focus(); } }, 250); };
+  } else {
+    if (!S.chat.length) S.chat.push({ role:"bot", text:"Hi Finn! Sag mir, was ich eintragen soll – Termine, Aufgaben, Arbeitszeiten. 😊" });
+    renderChat();
+  }
+  $("#chatMic", card).onclick = toggleVoice;
+  $("#chatSend", card).onclick = sendChat;
+  $("#chatIn", card).addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.preventDefault(); sendChat(); } });
 }

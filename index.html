@@ -249,6 +249,13 @@ h2{font-size:15px;margin:22px 0 10px;color:var(--dim);font-weight:700;text-trans
 .wk-block b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10.5px;}
 .wk-hline{position:absolute;left:0;right:0;border-top:1px solid rgba(127,136,160,.12);pointer-events:none;}
 
+/* Aufgaben: Kategorien als Spalten auf breiten Screens */
+@media(min-width:1000px){
+  #view-tasks .container-inner{max-width:none;}
+  .taskcols{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:0 18px;align-items:start;}
+  .taskcol{min-width:0;}
+}
+
 /* Chat */
 .chatwrap{display:flex;flex-direction:column;height:74vh;}
 .chatlog{flex:1;overflow-y:auto;padding:4px 2px;display:flex;flex-direction:column;gap:10px;}
@@ -278,9 +285,16 @@ details.moreopts[open] summary::before{content:'▾ ';}
 .locsec{cursor:pointer;user-select:none;}
 .locsec .arr{color:var(--dim2);font-size:12px;margin-left:auto;}
 
-/* Home-Layout: mobil gestapelt (Wetter-Woche nach dem Hauptteil), breit als Spalten */
-#view-home{display:flex;flex-direction:column;}
-.home-main{order:1;} .home-left{order:2;} .home-side{order:3;}
+/* Home-Layout: mobil neu geordnet (Wichtiges oben), breit als Spalten */
+.m-sec{display:contents;}
+@media(max-width:979px){
+  #view-home{display:flex;flex-direction:column;}
+  .home-main,.home-left,.home-side{display:contents;}
+  .m-sec{display:block;}
+  .m-hero{order:1;} .m-next{order:2;} .m-rout{order:3;} .m-blocks{order:4;}
+  .m-todo{order:5;} .m-post{order:6;} .m-chat{order:7;}
+  .m-stats{order:8;} .m-weather{order:9;} .m-planned{order:10;} .m-ww{order:11;}
+}
 @media(min-width:980px){
   .container{max-width:1100px;}
   #view-home{display:grid;grid-template-columns:1fr 330px;gap:18px;align-items:start;
