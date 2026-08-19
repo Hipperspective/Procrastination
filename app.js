@@ -154,14 +154,21 @@ function scheduleReload(){
   reloadPending=true;
   setTimeout(async ()=>{ reloadPending=false; await loadAll(); }, 400);
 }
+let _rtChannel = null;
 function initRealtime(){
-  sb.channel("sync-all")
+  if (_rtChannel){ try{ sb.removeChannel(_rtChannel); }catch(e){} }
+  _rtChannel = sb.channel("sync-all-"+Date.now())
     .on("postgres_changes", { event:"*", schema:"public" }, scheduleReload)
     .subscribe(status=>{
       if (status==="SUBSCRIBED") setSync("ok","synchron (live)");
+      if (status==="CHANNEL_ERROR" || status==="TIMED_OUT" || status==="CLOSED"){
+        setSync("", "synchron (auto-refresh)");
+        setTimeout(initRealtime, 8000); // neu verbinden
+      }
     });
-  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadAll(); });
 }
+document.addEventListener("visibilitychange", ()=>{ if(!document.hidden){ loadAll(); initRealtime(); } });
+window.addEventListener("online", ()=>{ loadAll(); initRealtime(); });
 
 // ---------- Task-Logik (aus der iOS-App übernommen) ----------
 function effCompletedToday(t){
@@ -549,6 +556,13 @@ function startApp(){
   loadAll();
   // Ticker für laufende Stempeluhr & Cooldowns
   S.tickTimer = setInterval(()=>{ if(S.tab==="work") renderWork(); if(S.tab==="home") renderHome(); }, 30000);
+  setInterval(()=>{
+    if (document.hidden) return;
+    if ($("#modalBg").classList.contains("open")) return;
+    const a = document.activeElement;
+    if (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) return; // nicht beim Tippen
+    loadAll();
+  }, 60000);
   // Service Worker
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 }
@@ -679,6 +693,14 @@ function openTaskForm(t){
 // Arbeitszeit
 // ============================================================
 function runningEntry(){ return S.workEntries.find(w=>!w.end_time); }
+// Aktuellen offenen Stempel-Eintrag IMMER frisch vom Server holen (andere Geräte!)
+async function serverOpenEntry(){
+  const { data, error } = await sb.from("work_entries").select("*")
+    .is("end_time", null).order("start_time",{ascending:false}).limit(1);
+  if (error){ toast("Verbindung fehlgeschlagen: "+error.message, true); return undefined; }
+  return (data && data[0]) || null;
+}
+
 function workedMinutes(w, ref){
   ref = ref || new Date();
   const end = w.end_time ? new Date(w.end_time) : ref;
@@ -807,28 +829,35 @@ function renderWork(){
   // Events
   if (run){
     $("#w_break").onclick = async ()=>{
-      if (run.break_started_at){
-        const add = Math.max(0, Math.round((Date.now()-new Date(run.break_started_at))/60000));
-        await sb.from("work_entries").update({ break_minutes:(run.break_minutes||0)+add, break_started_at:null })
-          .eq("id",run.id).is("end_time", null);
+      const open = await serverOpenEntry();
+      if (open === undefined) return;
+      if (!open){ toast("Schon ausgestempelt (anderes Gerät)"); loadAll(); return; }
+      if (open.break_started_at){
+        const add = Math.max(0, Math.round((Date.now()-new Date(open.break_started_at))/60000));
+        await sb.from("work_entries").update({ break_minutes:(open.break_minutes||0)+add, break_started_at:null })
+          .eq("id",open.id).is("end_time", null);
       } else {
         await sb.from("work_entries").update({ break_started_at:new Date().toISOString() })
-          .eq("id",run.id).is("end_time", null);
+          .eq("id",open.id).is("end_time", null);
       }
       loadAll();
     };
     $("#w_out").onclick = async ()=>{
-      let brk = run.break_minutes||0;
-      if (run.break_started_at) brk += Math.max(0, Math.round((Date.now()-new Date(run.break_started_at))/60000));
-      const { data: closed } = await sb.from("work_entries").update({ end_time:new Date().toISOString(), break_minutes:brk, break_started_at:null })
-        .eq("id",run.id).is("end_time", null).select("id");
+      const open = await serverOpenEntry();
+      if (open === undefined) return;
+      if (!open){ toast("War schon ausgestempelt (anderes Gerät)"); loadAll(); return; }
+      let brk = open.break_minutes||0;
+      if (open.break_started_at) brk += Math.max(0, Math.round((Date.now()-new Date(open.break_started_at))/60000));
+      const { data: closed, error } = await sb.from("work_entries").update({ end_time:new Date().toISOString(), break_minutes:brk, break_started_at:null })
+        .eq("id",open.id).is("end_time", null).select("id");
+      if (error) return toast("Ausstempeln fehlgeschlagen: "+error.message, true);
       toast(closed && closed.length ? "Ausgestempelt ✓" : "War schon ausgestempelt (anderes Gerät)"); loadAll();
     };
   } else {
     $("#w_in").onclick = async ()=>{
-      // Doppel-Einstempeln verhindern (anderes Gerät könnte schon laufen)
-      const { data: open } = await sb.from("work_entries").select("id").is("end_time", null).limit(1);
-      if (open && open.length){ toast("Es läuft schon eine Stempelung (anderes Gerät?)"); loadAll(); return; }
+      const open = await serverOpenEntry();
+      if (open === undefined) return;
+      if (open){ toast("Läuft schon seit "+fmtTime(new Date(open.start_time))+" (anderes Gerät)"); loadAll(); return; }
       const { error } = await sb.from("work_entries").insert({ start_time:new Date().toISOString() });
       if (error) return toast("Einstempeln fehlgeschlagen: "+error.message, true);
       toast("Eingestempelt – viel Erfolg!"); loadAll();
