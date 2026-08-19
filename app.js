@@ -1583,7 +1583,10 @@ function renderPlan(){
   tl += `</div>`;
   const empty = blocks.length ? "" : `<div class="section-empty" style="text-align:center;padding-top:10px">Noch keine Blöcke – mit + einen anlegen (Arbeit, Termin, Fahrt …)</div>`;
 
-  el.innerHTML = nav + strip + tl + empty + `<div style="height:8px"></div>`;
+  el.innerHTML = `<div class="plan-day">` + nav + strip + tl + empty + `<div style="height:8px"></div></div>`
+    + `<div class="plan-week card">${planWeekHtml()}</div>`
+    + `<div class="plan-month card">${planMonthHtml()}</div>`;
+  wirePlanPanels(el);
 
   $$(".weekstrip button", el).forEach(b=>b.onclick=()=>{ S.planDate=b.dataset.d; renderPlan(); });
   const shift = days => { const d=new Date(S.planDate+"T12:00:00"); d.setDate(d.getDate()+days); S.planDate=dayKey(d); renderPlan(); };
@@ -2756,5 +2759,86 @@ function wirePlannedCard(root){
   $$("[data-pday]", card).forEach(c=>c.onclick = ()=>{
     S.planDate = c.dataset.pday;
     switchTab("plan");
+  });
+}
+
+// ============================================================
+// Plan-Desktop: Wochen- und Monats-Panel
+// ============================================================
+function planWeekHtml(){
+  const sel = new Date(S.planDate+"T12:00:00");
+  const mon = new Date(sel); mon.setDate(mon.getDate() - ((mon.getDay()+6)%7));
+  const H0 = 6, H1 = 23, PXH = 30;
+  const height = (H1-H0)*PXH;
+  const top = m => Math.max(0, Math.min(height, (m/60-H0)*PXH));
+  const todayKey = dayKey(new Date());
+
+  let head = `<div class="wk-head">`;
+  let cols = `<div class="wk-grid">`;
+  for (let i=0;i<7;i++){
+    const d = new Date(mon); d.setDate(d.getDate()+i);
+    const dk = dayKey(d);
+    head += `<button data-wd="${dk}" class="${dk===S.planDate?"sel":""} ${dk===todayKey?"today":""}">
+      <span>${WEEKDAYS_DE[d.getDay()]}</span><b>${d.getDate()}</b></button>`;
+    let col = `<div class="wk-col" data-wcol="${dk}" style="height:${height}px">`;
+    for (let hh=H0+2; hh<H1; hh+=2) col += `<div class="wk-hline" style="top:${(hh-H0)*PXH}px"></div>`;
+    blocksFor(dk).forEach(b=>{
+      const endEff = b.end_min > b.start_min ? b.end_min : 1440;
+      const t0 = top(b.start_min), t1 = top(endEff);
+      const c = blockColor(b);
+      const bt = BLOCK_TYPES[b.type]||BLOCK_TYPES.event;
+      col += `<div class="wk-block" data-wb="${b.id}" style="top:${t0+1}px;height:${Math.max(16,t1-t0-2)}px;
+        background:${c}26;border-left-color:${c}">
+        <b>${esc(b.title||bt.label)}</b>${(t1-t0)>26?`<span style="opacity:.75">${minToHM(b.start_min)}</span>`:""}</div>`;
+    });
+    col += `</div>`;
+    cols += col;
+  }
+  head += `</div>`; cols += `</div>`;
+  const kw = (d=>{const x=new Date(d);x.setDate(x.getDate()+3-((x.getDay()+6)%7));const w1=new Date(x.getFullYear(),0,4);return 1+Math.round(((x-w1)/86400000-3+((w1.getDay()+6)%7))/7);})(sel);
+  return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <b style="font-size:13.5px">📆 Woche ${kw}</b>
+    <span style="font-size:11px;color:var(--dim2)">${mon.getDate()}.${mon.getMonth()+1}. – ${new Date(mon.getTime()+6*864e5).getDate()}.${new Date(mon.getTime()+6*864e5).getMonth()+1}.</span>
+  </div>` + head + cols;
+}
+
+function planMonthHtml(){
+  const sel = new Date(S.planDate+"T12:00:00");
+  const y = sel.getFullYear(), m = sel.getMonth();
+  const daysInMonth = new Date(y, m+1, 0).getDate();
+  const lead = (new Date(y, m, 1).getDay()+6)%7;
+  const todayKey = dayKey(new Date());
+  let cells = `<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;text-align:center">`;
+  ["Mo","Di","Mi","Do","Fr","Sa","So"].forEach(w=>cells+=`<div style="font-size:9.5px;font-weight:800;color:var(--dim2);padding:2px 0">${w}</div>`);
+  for (let i=0;i<lead;i++) cells += `<div></div>`;
+  for (let day=1; day<=daysInMonth; day++){
+    const dk = dayKey(new Date(y, m, day));
+    const blocks = blocksFor(dk).filter(b=>b.type!=="sleep");
+    const isSel = dk===S.planDate, isT = dk===todayKey;
+    const dots = blocks.slice(0,3).map(b=>`<i style="width:4px;height:4px;border-radius:50%;background:${blockColor(b)}"></i>`).join("");
+    cells += `<div data-mday="${dk}" role="button" tabindex="0" style="padding:4px 0 3px;border-radius:8px;cursor:pointer;
+      ${isSel?"background:var(--accent);":""}${isT&&!isSel?"background:var(--card2);":""}">
+      <div style="font-size:12px;font-weight:${isT||isSel?"800":"600"};color:${isSel?"#fff":isT?"var(--accent2)":"var(--text)"}">${day}</div>
+      <div style="display:flex;gap:2px;justify-content:center;height:5px;margin-top:1px">${dots}</div></div>`;
+  }
+  cells += `</div>`;
+  return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <button class="iconbtn" data-mnav="-1" style="padding:4px 10px">‹</button>
+    <b style="font-size:13px;text-transform:capitalize">${sel.toLocaleDateString("de-DE",{month:"long",year:"numeric"})}</b>
+    <button class="iconbtn" data-mnav="1" style="padding:4px 10px">›</button>
+  </div>` + cells;
+}
+
+function wirePlanPanels(el){
+  $$("[data-wd]", el).forEach(b=>b.onclick = ()=>{ S.planDate = b.dataset.wd; renderPlan(); });
+  $$("[data-wb]", el).forEach(x=>x.onclick = ()=>{
+    const b = S.timeBlocks.find(y=>y.id===x.dataset.wb); if (b) openBlockForm(b);
+  });
+  $$("[data-wcol]", el).forEach(c=>c.ondblclick = ()=>{ S.planDate = c.dataset.wcol; openBlockForm(null); });
+  $$("[data-mday]", el).forEach(c=>c.onclick = ()=>{ S.planDate = c.dataset.mday; renderPlan(); });
+  $$("[data-mnav]", el).forEach(b=>b.onclick = ()=>{
+    const d = new Date(S.planDate+"T12:00:00");
+    d.setMonth(d.getMonth() + parseInt(b.dataset.mnav));
+    S.planDate = dayKey(d); renderPlan();
   });
 }
