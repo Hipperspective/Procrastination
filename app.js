@@ -1267,6 +1267,13 @@ function homeBlockRows(){
   const nowM = new Date().getHours()*60+new Date().getMinutes();
   return blocks.map(b=>{
     const t = BLOCK_TYPES[b.type]||BLOCK_TYPES.event;
+    const bAllDay = b.start_min<=0 && (b.end_min>=1439 || b.end_min<=60);
+    if (bAllDay){
+      return `<div class="planrow" data-block="${b.id}" role="button" tabindex="0">
+        <span class="ptime">📅</span>
+        <span class="pt">${t.ico} ${esc(b.title||t.label)}</span>
+        <span class="pm">ganztägig</span></div>`;
+    }
     const endEff = b.end_min > b.start_min ? b.end_min : 1440;
     const past = endEff < nowM;
     return `<div class="planrow ${past?"pdone":""}" data-block="${b.id}">
@@ -1560,9 +1567,22 @@ function renderPlan(){
     <div><button class="btn small sec" id="pl_today" ${isTodaySel?"disabled":""}>Heute</button>
     <button class="iconbtn" id="pl_next">›</button></div></div>`;
 
+  // Ganztägige Blöcke (00:00–23:59 oder um Mitternacht) als Banner, nicht in der Timeline
+  const isAllDay = b => b.start_min<=0 && (b.end_min>=1439 || b.end_min<=60);
+  const all = blocksFor(S.planDate);
+  const allDayBlocks = all.filter(b=>isAllDay(b) && b.type!=="sleep");
+  const blocks = all.filter(b=>!(isAllDay(b) && b.type!=="sleep"));
+  let banner = "";
+  if (allDayBlocks.length){
+    banner = `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">` + allDayBlocks.map(b=>{
+      const c = blockColor(b), t = BLOCK_TYPES[b.type]||BLOCK_TYPES.event;
+      return `<div class="tl-allday" data-id="${b.id}" role="button" tabindex="0" style="background:${c}22;border:1px solid ${c}55;
+        border-left:4px solid ${c};border-radius:10px;padding:7px 12px;font-size:13px;font-weight:700;cursor:pointer">
+        ${t.ico} ${esc(b.title||t.label)} <span style="font-weight:500;opacity:.65;font-size:11.5px">ganztägig</span></div>`;
+    }).join("") + `</div>`;
+  }
   // Timeline 05–24 Uhr (Blöcke davor werden geklemmt), 1h = 44px
   const H0=5, PXH=44, top = m => Math.max(0,(m/60-H0))*PXH;
-  const blocks = blocksFor(S.planDate);
   let tl = `<div class="timeline" style="height:${(24-H0)*PXH+10}px">`;
   for (let h=H0; h<=24; h++)
     tl += `<div class="tl-hour" style="top:${(h-H0)*PXH}px"><span>${pad(h%24)}:00</span></div>`;
@@ -1583,7 +1603,7 @@ function renderPlan(){
   tl += `</div>`;
   const empty = blocks.length ? "" : `<div class="section-empty" style="text-align:center;padding-top:10px">Noch keine Blöcke – mit + einen anlegen (Arbeit, Termin, Fahrt …)</div>`;
 
-  el.innerHTML = `<div class="plan-day">` + nav + strip + tl + empty + `<div style="height:8px"></div></div>`
+  el.innerHTML = `<div class="plan-day">` + nav + strip + banner + tl + empty + `<div style="height:8px"></div></div>`
     + `<div class="plan-week card">${planWeekHtml()}</div>`
     + `<div class="plan-month card">${planMonthHtml()}</div>`;
   wirePlanPanels(el);
@@ -1593,7 +1613,7 @@ function renderPlan(){
   $("#pl_prev").onclick = ()=>shift(-1);
   $("#pl_next").onclick = ()=>shift(1);
   $("#pl_today").onclick = ()=>{ S.planDate=dayKey(new Date()); renderPlan(); };
-  $$(".tl-block", el).forEach(x=>x.onclick=()=>{
+  $$(".tl-block, .tl-allday", el).forEach(x=>x.onclick=()=>{
     const b=S.timeBlocks.find(y=>y.id===x.dataset.id); if(b) openBlockForm(b);
   });
 }
@@ -1670,14 +1690,34 @@ const AI_TOOLS = [
       notes:{type:"string"}, tags:{type:"array",items:{type:"string"}},
     }, required:["title"] } } },
   { type:"function", function:{ name:"create_appointment",
-    description:"Termin/Zeitblock im Kalender anlegen",
+    description:"Termin/Zeitblock im Kalender anlegen. Ohne start/end = ganztägiger Termin.",
     parameters:{ type:"object", properties:{
       date:{type:"string",description:"YYYY-MM-DD"},
       title:{type:"string"},
-      start:{type:"string",description:"HH:MM"}, end:{type:"string",description:"HH:MM"},
+      start:{type:"string",description:"HH:MM, weglassen für ganztägig"}, end:{type:"string",description:"HH:MM, weglassen für ganztägig"},
       type:{type:"string",enum:["work","home","travel","event","routine","free","sleep"],description:"Standard: event"},
       notes:{type:"string"},
-    }, required:["date","title","start","end"] } } },
+    }, required:["date","title"] } } },
+  { type:"function", function:{ name:"update_appointment",
+    description:"Bestehenden Termin ändern (bei Korrekturen/Nachträgen IMMER das statt create_appointment!). Findet den Termin per Titel (unscharf) und Datum.",
+    parameters:{ type:"object", properties:{
+      title:{type:"string",description:"Titel des bestehenden Termins"},
+      date:{type:"string",description:"YYYY-MM-DD des bestehenden Termins"},
+      new_title:{type:"string"}, new_date:{type:"string",description:"YYYY-MM-DD"},
+      new_start:{type:"string",description:"HH:MM"}, new_end:{type:"string",description:"HH:MM"},
+      all_day:{type:"boolean",description:"true = ganztägig machen"},
+      new_type:{type:"string",enum:["work","home","travel","event","routine","free","sleep"]},
+      notes:{type:"string"},
+    }, required:["title","date"] } } },
+  { type:"function", function:{ name:"update_task",
+    description:"Bestehende Aufgabe ändern (bei Korrekturen IMMER das statt create_task!). Findet die Aufgabe per Titel (unscharf).",
+    parameters:{ type:"object", properties:{
+      title:{type:"string",description:"Titel der bestehenden Aufgabe"},
+      new_title:{type:"string"}, duration_minutes:{type:"integer"}, location:{type:"string"},
+      is_priority:{type:"boolean"}, due_date:{type:"string",description:"YYYY-MM-DD"},
+      scheduled_date:{type:"string",description:"YYYY-MM-DD"}, scheduled_time:{type:"string",description:"HH:MM"},
+      notes:{type:"string"},
+    }, required:["title"] } } },
   { type:"function", function:{ name:"add_work_entry",
     description:"Arbeitszeit-Eintrag nachtragen",
     parameters:{ type:"object", properties:{
@@ -1707,6 +1747,8 @@ Heute ist ${today.toLocaleDateString("de-DE",{weekday:"long",day:"2-digit",month
 Du kannst per Tools Aufgaben, Termine (Zeitblöcke) und Arbeitszeiten anlegen, Aufgaben abhaken und Termine löschen.
 Relative Datumsangaben ("morgen", "Freitag") immer in konkrete Daten umrechnen. Bei fehlender Endzeit eines Termins nimm 1 Stunde.
 ERINNERUNGEN ("erinnere mich am X um Y an Z"): create_task mit scheduled_date + scheduled_time und is_priority=true. Die App blendet sie automatisch erst ab dem Vortag ein und schickt zur Uhrzeit eine Push-Nachricht.
+KORREKTUREN: Wenn sich eine Nachricht auf einen gerade angelegten/besprochenen Eintrag bezieht ("bis 23 Uhr", "doch ohne Uhrzeit", "verschieb auf Montag"), IMMER update_appointment/update_task verwenden – NIE einen zweiten Eintrag anlegen.
+Termin ohne Uhrzeit ("nur Hinweis, dass er kommt"): create_appointment OHNE start/end -> ganztägig.
 Verfügbare Orte/Listen: ${S.locations.map(l=>l.name).join(", ")}. Wenn kein Ort passt, nimm "To-Do".
 Antworte kurz, freundlich, auf Deutsch. Fasse nach Tool-Aufrufen knapp zusammen, was du angelegt hast.
 
@@ -1741,11 +1783,55 @@ async function aiExecTool(name, args){
       return { ok:true, info };
     }
     if (name==="create_appointment"){
+      const allDay = !args.start && !args.end;
       const row = { date:args.date, title:args.title, type:args.type||"event",
-        start_min:hm(args.start), end_min:hm(args.end), notes:args.notes||"", color:"" };
+        start_min: allDay ? 0 : hm(args.start), end_min: allDay ? 1439 : hm(args.end||args.start),
+        notes:args.notes||"", color:"" };
+      if (!allDay && row.end_min<=row.start_min) row.end_min = row.start_min+60;
       const { error } = await sb.from("time_blocks").insert(row);
       if (error) throw error;
-      return { ok:true, info:`Termin "${args.title}" am ${args.date} ${args.start}–${args.end}` };
+      return { ok:true, info: allDay ? `Termin "${args.title}" am ${args.date} (ganztägig)` : `Termin "${args.title}" am ${args.date} ${minToHM(row.start_min)}–${minToHM(row.end_min)}` };
+    }
+    if (name==="update_appointment"){
+      const q = (args.title||"").toLowerCase();
+      const b = S.timeBlocks.find(x=>x.date===args.date && (x.title||"").toLowerCase().includes(q))
+        || S.timeBlocks.find(x=>(x.title||"").toLowerCase().includes(q));
+      if (!b) return { ok:false, info:`Kein Termin "${args.title}" gefunden.` };
+      const upd = {};
+      if (args.new_title) upd.title = args.new_title;
+      if (args.new_date) upd.date = args.new_date;
+      if (args.all_day){ upd.start_min = 0; upd.end_min = 1439; }
+      else {
+        if (args.new_start) upd.start_min = hm(args.new_start);
+        if (args.new_end) upd.end_min = hm(args.new_end);
+      }
+      if (args.new_type) upd.type = args.new_type;
+      if (args.notes !== undefined) upd.notes = args.notes;
+      const { error } = await sb.from("time_blocks").update(upd).eq("id", b.id);
+      if (error) throw error;
+      const s = upd.start_min ?? b.start_min, e2 = upd.end_min ?? b.end_min;
+      return { ok:true, info:`Termin "${upd.title||b.title}" geändert: ${upd.date||b.date} ${args.all_day?"(ganztägig)":minToHM(s)+"–"+minToHM(e2)}` };
+    }
+    if (name==="update_task"){
+      const q = (args.title||"").toLowerCase();
+      const t = S.tasks.find(x=>!x.is_archived && x.title.toLowerCase().includes(q));
+      if (!t) return { ok:false, info:`Keine Aufgabe "${args.title}" gefunden.` };
+      const upd = {};
+      if (args.new_title) upd.title = args.new_title;
+      if (args.duration_minutes) upd.duration_minutes = args.duration_minutes;
+      if (args.location && S.locations.some(l=>l.name===args.location)) upd.location = args.location;
+      if (args.is_priority !== undefined) upd.is_priority = !!args.is_priority;
+      if (args.due_date) upd.due_date = new Date(args.due_date+"T23:59:00").toISOString();
+      if (args.notes !== undefined) upd.notes = args.notes;
+      if (args.scheduled_date){
+        upd.scheduled_date = args.scheduled_date + "T" + (args.scheduled_time||"09:00") + ":00";
+        upd.has_scheduled_time = !!args.scheduled_time;
+        const prev = new Date(args.scheduled_date+"T00:00:00"); prev.setDate(prev.getDate()-1);
+        upd.start_date = dayKey(prev) + "T00:00:00";
+      }
+      const { error } = await sb.from("tasks").update(upd).eq("id", t.id);
+      if (error) throw error;
+      return { ok:true, info:`Aufgabe "${upd.title||t.title}" aktualisiert` };
     }
     if (name==="add_work_entry"){
       const st = new Date(`${args.date}T${args.start}:00`), en = new Date(`${args.date}T${args.end}:00`);
@@ -2691,6 +2777,12 @@ function plannedCardHtml(){
   </div>`;
   const blockRow = b => {
     const t = BLOCK_TYPES[b.type]||BLOCK_TYPES.event;
+    const bAllDay = b.start_min<=0 && (b.end_min>=1439 || b.end_min<=60);
+    if (bAllDay) return `<div class="planrow" data-pblock="${b.id}" role="button" tabindex="0" style="padding:7px 0">
+      <span class="ptime" style="min-width:40px">📅</span>
+      <span style="width:8px;height:8px;min-width:8px;border-radius:50%;background:${blockColor(b)}"></span>
+      <span class="pt" style="font-size:13.5px">${esc(b.title||t.label)}</span>
+      <span class="pm">ganztägig</span></div>`;
     return `<div class="planrow" data-pblock="${b.id}" role="button" tabindex="0" style="padding:7px 0">
       <span class="ptime" style="min-width:40px">${minToHM(b.start_min)}</span>
       <span style="width:8px;height:8px;min-width:8px;border-radius:50%;background:${blockColor(b)}"></span>
@@ -2783,6 +2875,13 @@ function planWeekHtml(){
     let col = `<div class="wk-col" data-wcol="${dk}" style="height:${height}px">`;
     for (let hh=H0+2; hh<H1; hh+=2) col += `<div class="wk-hline" style="top:${(hh-H0)*PXH}px"></div>`;
     blocksFor(dk).forEach(b=>{
+      const bAllDay = b.start_min<=0 && (b.end_min>=1439 || b.end_min<=60);
+      if (bAllDay && b.type!=="sleep"){
+        const c2 = blockColor(b);
+        col += `<div class="wk-block" data-wb="${b.id}" style="top:2px;height:15px;background:${c2}33;border-left-color:${c2}">
+          <b>${esc(b.title||"Termin")}</b></div>`;
+        return;
+      }
       const endEff = b.end_min > b.start_min ? b.end_min : 1440;
       const t0 = top(b.start_min), t1 = top(endEff);
       const c = blockColor(b);
