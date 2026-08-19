@@ -1296,6 +1296,7 @@ async function renderHome(){
   };
 
   el.innerHTML = `
+    <div class="home-main">
     <div class="hero">
       <div class="greet">${greetingText()}, Finn! 👋</div>
       <div class="date">${dateStr}</div>
@@ -1330,7 +1331,10 @@ async function renderHome(){
     ${ homeGroupedPlan(openPlan, planRow) || `<div class="card"><div class="section-empty">${totalN?"Alles erledigt – stark! 🎉":"Heute steht nichts an. Genieß den Tag ☕️"}</div></div>` }
     <button class="btn sec" id="planTomorrow" style="margin-top:2px">🌙 Morgen planen</button>
     ${donePlan.length?`<div class="card" style="opacity:.65;margin-top:10px">${donePlan.map(planRow).join("")}</div>`:""}
+    </div>
+    <div class="home-side">${todoPanelHtml()}</div>
   `;
+  wireTodoPanel(el);
 
   $$(".routinecard", el).forEach(c=>c.onclick=()=>openRoutine(c.dataset.loc));
   $("#homeToTasks").onclick = ()=>switchTab("tasks");
@@ -1968,4 +1972,61 @@ function openPlanTomorrow(){
     toast(`🌙 ${selected.size} Aufgabe${selected.size===1?"":"n"} für morgen geplant`);
     loadAll();
   };
+}
+
+// ============================================================
+// ☑️ To-Do-Panel am Heute-Screen (rechts auf Mac/iPad, unten am iPhone)
+// ============================================================
+function todoLocationName(){
+  const l = S.locations.find(x=>!x.is_routine && x.name.toLowerCase()==="to-do")
+    || S.locations.find(x=>!x.is_routine && x.name.toLowerCase().includes("to"))
+    || S.locations.find(x=>!x.is_routine);
+  return l ? l.name : "To-Do";
+}
+function todoPanelHtml(){
+  const locName = todoLocationName();
+  const items = S.tasks.filter(t=>!t.is_archived && (t.location||"")===locName && startReached(t));
+  const open = items.filter(t=>!isCompletedToday(t))
+    .sort((a,b)=>(b.is_priority-a.is_priority)||(overdueDays(b)-overdueDays(a)));
+  const done = items.filter(isCompletedToday);
+  const row = t => `<div class="todorow ${isCompletedToday(t)?"tdone":""}" data-id="${t.id}">
+    <button class="chk ${isCompletedToday(t)?"on":""}" style="width:24px;height:24px;min-width:24px;margin:0;font-size:12px" aria-label="Erledigt">✓</button>
+    <span class="tt" role="button" tabindex="0">${t.is_priority?"★ ":""}${esc(t.title)}</span>
+    <span style="font-size:11.5px;color:var(--dim2)">${fmtMin(t.duration_minutes)}</span>
+  </div>`;
+  return `<div class="card" id="todoPanel" style="border-left:4px solid var(--accent)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <b style="font-size:14px">☑️ ${esc(locName)}</b>
+      <span style="font-size:11.5px;color:var(--dim2);font-weight:700">${open.length} offen</span>
+    </div>
+    <div class="quickadd">
+      <input id="todoQuick" placeholder="Schnell hinzufügen…" autocomplete="off" enterkeyhint="done">
+      <button id="todoQuickAdd" aria-label="Hinzufügen">+</button>
+    </div>
+    ${open.map(row).join("") || `<div class="section-empty" style="padding:8px 0">Alles leer – nice! ✨</div>`}
+    ${done.length?`<div style="margin-top:6px;opacity:.55">${done.slice(0,5).map(row).join("")}</div>`:""}
+  </div>`;
+}
+function wireTodoPanel(root){
+  const panel = $("#todoPanel", root); if (!panel) return;
+  const input = $("#todoQuick", panel);
+  const add = async ()=>{
+    const title = input.value.trim(); if (!title) return;
+    input.value=""; input.focus();
+    const { error } = await sb.from("tasks").insert({
+      title, duration_minutes:15, location: todoLocationName(), kind:"oneOff" });
+    if (error) return toast("Anlegen fehlgeschlagen: "+error.message, true);
+    toast("✓ Hinzugefügt");
+    await loadAll();
+    // Fokus nach dem Neu-Rendern zurück ins Eingabefeld (Mac: mehrere hintereinander tippen)
+    const ni = $("#todoQuick"); if (ni) ni.focus();
+  };
+  $("#todoQuickAdd", panel).onclick = add;
+  input.addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.preventDefault(); add(); } });
+  $$(".todorow", panel).forEach(r=>{
+    const t = S.tasks.find(x=>x.id===r.dataset.id); if(!t) return;
+    $(".chk", r).onclick = (e)=>{ e.stopPropagation();
+      isCompletedToday(t) ? uncompleteToday(t) : completeTask(t); };
+    $(".tt", r).onclick = ()=>openTaskForm(t);
+  });
 }
