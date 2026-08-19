@@ -23,6 +23,7 @@ const S = {
   tickTimer: null,
 };
 
+const LOC_PALETTE = ["#6c8cff","#3ddc84","#ff9f43","#b58cff","#38d4c3","#ffd54f","#f48fb1","#ff5d6c","#7986cb","#a1887f"];
 const DEFAULT_LOCATIONS = ["Home", "Work", "Homeoffice", "To-Do"];
 const WEEKDAYS_DE = ["So","Mo","Di","Mi","Do","Fr","Sa"]; // index = JS getDay()
 
@@ -285,7 +286,7 @@ async function toggleSubtask(t, subId){
 function visibleTasks(){
   const q = S.search.trim().toLowerCase();
   return S.tasks.filter(t => !t.is_archived)
-    .filter(t => S.locFilter==="ALLE" || (t.location||"") === S.locFilter)
+    .filter(t => S.locFilter==="ALLE" ? !isRoutineTask(t) : (t.location||"") === S.locFilter)
     .filter(t => !S.tagFilter || (t.tags||[]).some(x => x.toLowerCase()===S.tagFilter.toLowerCase()))
     .filter(t => !q || t.title.toLowerCase().includes(q) || (t.notes||"").toLowerCase().includes(q)
       || (t.tags||[]).some(x=>x.toLowerCase().includes(q)) || (t.location||"").toLowerCase().includes(q));
@@ -295,7 +296,7 @@ function renderLocationChips(){
   const counts = {};
   S.tasks.filter(t=>!t.is_archived).forEach(t=>{ counts[t.location||""] = (counts[t.location||""]||0)+1; });
   const el = $("#locChips");
-  const chips = [{name:"ALLE", label:"Alle", n:S.tasks.filter(t=>!t.is_archived).length}]
+  const chips = [{name:"ALLE", label:"Alle", n:S.tasks.filter(t=>!t.is_archived && !isRoutineTask(t)).length}]
     .concat(S.locations.map(l=>({name:l.name, label:l.name, n:counts[l.name]||0})));
   el.innerHTML = chips.map(c =>
     `<button class="chip ${S.locFilter===c.name?"active":""}" data-loc="${esc(c.name)}">${esc(c.label)} <span class="n">${c.n}</span></button>`
@@ -334,6 +335,7 @@ function taskRow(t){
   if (t.repeat_count>1) meta.push(`<b>${eff}/${t.repeat_count}×</b>`);
   if (cool) meta.push(`<span class="amber">⏸ Pause noch ${fmtMin(cooldownRemaining(t))}</span>`);
   if (ds.label) meta.push(`<span class="${ds.cls}">${ds.label}</span>`);
+  if (t.scheduled_date && !isToday(t.scheduled_date) && dayKey(new Date(t.scheduled_date))===dayKey(new Date(Date.now()+86400000))) meta.push(`<span class="amber">🌙 morgen geplant</span>`);
   if ((t.active_weekdays||[]).length) meta.push(`📅 ${(t.active_weekdays).map(d=>WEEKDAYS_DE[d-1]).join(",")}`);
   if (!dependencySatisfied(t)){
     const p = S.tasks.find(x=>x.id===t.dependency_task_id);
@@ -396,7 +398,7 @@ function renderTasks(){
   }
   if (S.locFilter==="ALLE"){
     // Nach Ort/Kategorie gruppieren (Reihenfolge wie in den Einstellungen)
-    const palette = ["#6c8cff","#3ddc84","#ff9f43","#b58cff","#38d4c3","#ffd54f","#f48fb1","#ff5d6c","#7986cb","#a1887f"];
+    const palette = LOC_PALETTE;
     const locSection = (name, color, arr) => {
       if (!arr.length) return "";
       const collapsed = S.collapsed.has(name);
@@ -430,7 +432,7 @@ function renderTasks(){
   $$(".task", el).forEach(row => {
     const t = S.tasks.find(x=>x.id===row.dataset.id);
     $(".chk", row).onclick = (e)=>{ e.stopPropagation();
-      if (isCompletedToday(t)){ if(confirm("Erledigung von heute zurücknehmen?")) uncompleteToday(t); }
+      if (isCompletedToday(t)) uncompleteToday(t);
       else completeTask(t);
     };
     $(".main", row).onclick = (e)=>{
@@ -462,11 +464,26 @@ function renderArchive(){
       await sb.from("tasks").update({is_archived:false,last_done_at:null,completed_today_count:0}).eq("id",t.id);
       toast("Wiederhergestellt"); loadAll();
     };
-    $("[data-act=del]",row).onclick = async ()=>{
-      if(!confirm(`„${t.title}" endgültig löschen?`)) return;
-      await sb.from("tasks").delete().eq("id",t.id); loadAll();
-    };
+    armDelete($("[data-act=del]",row), async ()=>{
+      const { error } = await sb.from("tasks").delete().eq("id",t.id);
+      if (error) return toast("Löschen fehlgeschlagen: "+error.message, true);
+      loadAll();
+    });
   });
+}
+
+
+// confirm() ist in iOS-Homescreen-Apps unzuverlässig -> Löschen per Doppel-Tipp bestätigen
+function armDelete(btn, fn){
+  if (!btn) return;
+  btn.onclick = async (e)=>{
+    e.stopPropagation();
+    if (btn.dataset.armed){ btn.disabled=true; await fn(); return; }
+    btn.dataset.armed = "1";
+    btn.dataset.old = btn.textContent;
+    btn.textContent = "❗ Wirklich löschen? Nochmal tippen";
+    setTimeout(()=>{ if (btn.isConnected && btn.dataset.armed){ delete btn.dataset.armed; btn.textContent = btn.dataset.old; } }, 3500);
+  };
 }
 
 // ---------- Modal-Grundgerüst ----------
@@ -637,11 +654,11 @@ function openTaskForm(t){
     if (error) return toast("Fehler: "+error.message, true);
     closeModal(); toast(isNew?"Aufgabe angelegt":"Gespeichert"); loadAll();
   };
-  if (!isNew) $("#f_del").onclick = async ()=>{
-    if (!confirm(`„${t.title}" löschen?`)) return;
-    await sb.from("tasks").delete().eq("id", t.id);
-    closeModal(); loadAll();
-  };
+  if (!isNew) armDelete($("#f_del"), async ()=>{
+    const { error } = await sb.from("tasks").delete().eq("id", t.id);
+    if (error) return toast("Löschen fehlgeschlagen: "+error.message, true);
+    closeModal(); toast("Gelöscht"); loadAll();
+  });
 }
 
 // ============================================================
@@ -836,10 +853,11 @@ function openWorkEntryForm(w){
     if (error) return toast("Fehler: "+error.message, true);
     closeModal(); loadAll();
   };
-  if (!isNew) $("#we_del").onclick = async ()=>{
-    if(!confirm("Eintrag löschen?")) return;
-    await sb.from("work_entries").delete().eq("id",w.id); closeModal(); loadAll();
-  };
+  if (!isNew) armDelete($("#we_del"), async ()=>{
+    const { error } = await sb.from("work_entries").delete().eq("id",w.id);
+    if (error) return toast("Löschen fehlgeschlagen: "+error.message, true);
+    closeModal(); toast("Gelöscht"); loadAll();
+  });
 }
 
 function openWorkSettings(){
@@ -974,11 +992,11 @@ function openSettings(){
       await sb.from("locations").update({is_work_location:!l.is_work_location}).eq("id",l.id);
       await loadAll(); openSettings();
     };
-    $("[data-act=del]",row).onclick = async ()=>{
-      if(!confirm(`Ort „${l.name}" löschen? (Aufgaben bleiben erhalten)`)) return;
-      await sb.from("locations").delete().eq("id",l.id);
+    armDelete($("[data-act=del]",row), async ()=>{
+      const { error } = await sb.from("locations").delete().eq("id",l.id);
+      if (error) return toast("Löschen fehlgeschlagen: "+error.message, true);
       await loadAll(); openSettings();
-    };
+    });
   });
   $("#s_addloc").onclick = async ()=>{
     const v=$("#s_newloc").value.trim(); if(!v) return;
@@ -1212,6 +1230,27 @@ function homePlanItems(){
   return items;
 }
 
+// "Als Nächstes" in Kategorie-Häppchen (max 3 pro Kategorie) statt einer Wand
+function homeGroupedPlan(openPlan, planRow){
+  if (!openPlan.length) return "";
+  const PER_CAT = 3;
+  const groups = [];
+  S.locations.filter(l=>!l.is_routine).forEach((l,i)=>{
+    const arr = openPlan.filter(p=>(p.t.location||"")===l.name);
+    if (arr.length) groups.push({ name:l.name, color:LOC_PALETTE[i%LOC_PALETTE.length], arr });
+  });
+  const rest = openPlan.filter(p=>!S.locations.some(l=>!l.is_routine && l.name===(p.t.location||"")));
+  if (rest.length) groups.push({ name:"Sonstiges", color:"#7e88a0", arr:rest });
+  return groups.map(g=>`<div class="card" style="border-left:4px solid ${g.color}">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">
+      <b style="font-size:13px">${esc(g.name)}</b>
+      <span style="font-size:11.5px;color:var(--dim2);font-weight:700">${g.arr.length}</span>
+    </div>
+    ${g.arr.slice(0,PER_CAT).map(planRow).join("")}
+    ${g.arr.length>PER_CAT?`<div style="text-align:center;padding-top:6px"><a class="homeMoreCat" data-loc="${esc(g.name)}" style="color:var(--accent2);font-size:12px;font-weight:700;cursor:pointer">＋ ${g.arr.length-PER_CAT} weitere ›</a></div>`:""}
+  </div>`).join("");
+}
+
 async function renderHome(){
   const el = $("#view-home");
   if (!el || S.tab!=="home") return;
@@ -1288,10 +1327,9 @@ async function renderHome(){
     ${ homeBlockRows() ? `<div class="homehead"><h2>📅 Termine heute</h2><a id="homeToPlan">Zum Plan ›</a></div>
     <div class="card">${homeBlockRows()}</div>` : "" }
     <div class="homehead"><h2>📋 Als Nächstes</h2><a id="homeToTasks">Alle Aufgaben ›</a></div>
-    <div class="card">${ openPlan.length ? (openPlan.slice(0,5).map(planRow).join("")
-      + (openPlan.length>5 ? `<div style="text-align:center;padding-top:8px"><a id="homeMore" style="color:var(--accent2);font-size:12.5px;font-weight:700;cursor:pointer">＋ ${openPlan.length-5} weitere ›</a></div>` : ""))
-      : `<div class="section-empty">${totalN?"Alles erledigt – stark! 🎉":"Heute steht nichts an. Genieß den Tag ☕️"}</div>`}</div>
-    ${donePlan.length?`<div class="card" style="opacity:.65">${donePlan.map(planRow).join("")}</div>`:""}
+    ${ homeGroupedPlan(openPlan, planRow) || `<div class="card"><div class="section-empty">${totalN?"Alles erledigt – stark! 🎉":"Heute steht nichts an. Genieß den Tag ☕️"}</div></div>` }
+    <button class="btn sec" id="planTomorrow" style="margin-top:2px">🌙 Morgen planen</button>
+    ${donePlan.length?`<div class="card" style="opacity:.65;margin-top:10px">${donePlan.map(planRow).join("")}</div>`:""}
   `;
 
   $$(".routinecard", el).forEach(c=>c.onclick=()=>openRoutine(c.dataset.loc));
@@ -1301,13 +1339,17 @@ async function renderHome(){
     const b=S.timeBlocks.find(x=>x.id===row.dataset.block); if(b) openBlockForm(b);
   });
   $("#homeWork").onclick = ()=>switchTab("work");
-  const hm2 = $("#homeMore"); if (hm2) hm2.onclick = ()=>switchTab("tasks");
+  $$(".homeMoreCat", el).forEach(a=>a.onclick = ()=>{
+    S.locFilter = S.locations.some(l=>l.name===a.dataset.loc) ? a.dataset.loc : "ALLE";
+    switchTab("tasks");
+  });
+  const pt = $("#planTomorrow"); if (pt) pt.onclick = openPlanTomorrow;
   $$(".planrow[data-id]", el).forEach(row=>{
     const t = S.tasks.find(x=>x.id===row.dataset.id);
     const chk = $("[data-chk]", row);
     if (chk) chk.onclick = (e)=>{ e.stopPropagation();
       if (!t) return;
-      if (isCompletedToday(t)){ if(confirm("Erledigung zurücknehmen?")) uncompleteToday(t); }
+      if (isCompletedToday(t)) uncompleteToday(t);
       else completeTask(t);
     };
     row.onclick = ()=>{ if(t) openTaskForm(t); };
@@ -1468,10 +1510,11 @@ function openBlockForm(b){
     S.planDate = row.date;
     closeModal(); loadAll();
   };
-  if (!isNew) $("#b_del").onclick = async ()=>{
-    if(!confirm("Block löschen?")) return;
-    await sb.from("time_blocks").delete().eq("id", b.id); closeModal(); loadAll();
-  };
+  if (!isNew) armDelete($("#b_del"), async ()=>{
+    const { error } = await sb.from("time_blocks").delete().eq("id", b.id);
+    if (error) return toast("Löschen fehlgeschlagen: "+error.message, true);
+    closeModal(); toast("Gelöscht"); loadAll();
+  });
 }
 
 // ============================================================
@@ -1855,4 +1898,74 @@ async function renderNotifySettings(){
     await sb.from("locations").update({ routine_notify_min: hmToMin(inp.value) }).eq("id", inp.dataset.loc);
     loadAll();
   });
+}
+
+// ============================================================
+// 🌙 Morgen planen – abends Aufgaben für den Folgetag auswählen
+// ============================================================
+function openPlanTomorrow(){
+  const tom = new Date(Date.now()+86400000);
+  const tomKey = dayKey(tom);
+  const tomWeekday = tom.getDay()+1;
+  const candidates = S.tasks.filter(t => !t.is_archived && !isRoutineTask(t))
+    .filter(t => {
+      const days = t.active_weekdays||[];
+      return !days.length || days.includes(tomWeekday); // morgen überhaupt aktiv?
+    })
+    .sort((a,b) => {
+      const aSel = a.scheduled_date && dayKey(new Date(a.scheduled_date))===tomKey ? 1:0;
+      const bSel = b.scheduled_date && dayKey(new Date(b.scheduled_date))===tomKey ? 1:0;
+      return (bSel-aSel) || (b.is_priority-a.is_priority) || (overdueDays(b)-overdueDays(a));
+    });
+  const selected = new Set(candidates.filter(t => t.scheduled_date && dayKey(new Date(t.scheduled_date))===tomKey).map(t=>t.id));
+  const original = new Set(selected);
+
+  const rowHtml = t => {
+    const on = selected.has(t.id);
+    return `<div class="subrow ${on?"on":""}" data-id="${t.id}" style="padding:10px 0;font-size:15px;border-bottom:1px solid var(--line)">
+      <span class="box" style="width:24px;height:24px;min-width:24px;border-radius:7px;font-size:13px">✓</span>
+      <span style="flex:1">${t.is_priority?"★ ":""}${esc(t.title)}</span>
+      <span style="font-size:12px;color:var(--dim)">${esc(t.location||"")} · ${fmtMin(t.duration_minutes)}</span>
+    </div>`;
+  };
+  const totalMin = () => candidates.filter(t=>selected.has(t.id)).reduce((a,t)=>a+t.duration_minutes,0);
+
+  openModal(`
+    <h3>🌙 Morgen planen</h3>
+    <p style="color:var(--dim);font-size:13.5px;margin:4px 0 10px">
+      ${tom.toLocaleDateString("de-DE",{weekday:"long",day:"numeric",month:"long"})} –
+      Wähle aus, was du morgen erledigen willst. Die Auswahl steht dir morgen ganz oben in „Als Nächstes".</p>
+    <style>#pt_list .subrow.on span{text-decoration:none;color:var(--text);}</style>
+    <div style="position:sticky;top:-20px;background:var(--bg2);padding:6px 0;z-index:5;font-size:13px;font-weight:700" id="pt_count"></div>
+    <div id="pt_list">${candidates.map(rowHtml).join("") || `<div class="section-empty">Keine offenen Aufgaben.</div>`}</div>
+    <div style="height:16px"></div>
+    <button class="btn" id="pt_save">Plan speichern</button>
+  `);
+  const updateCount = ()=>{ $("#pt_count").textContent = `${selected.size} ausgewählt · ca. ${fmtMin(totalMin())}`; };
+  updateCount();
+  $$("#pt_list .subrow").forEach(row=>{
+    row.onclick = ()=>{
+      const id = row.dataset.id;
+      selected.has(id) ? selected.delete(id) : selected.add(id);
+      row.classList.toggle("on", selected.has(id));
+      updateCount();
+    };
+  });
+  $("#pt_save").onclick = async ()=>{
+    const btn = $("#pt_save"); btn.disabled = true; btn.textContent = "Speichere…";
+    const jobs = [];
+    for (const t of candidates){
+      const now = selected.has(t.id), was = original.has(t.id);
+      if (now && !was)
+        jobs.push(sb.from("tasks").update({ scheduled_date: tomKey+"T09:00:00", has_scheduled_time:false }).eq("id", t.id));
+      if (!now && was)
+        jobs.push(sb.from("tasks").update({ scheduled_date: null, has_scheduled_time:false }).eq("id", t.id));
+    }
+    const res = await Promise.all(jobs);
+    const err = res.find(r=>r.error);
+    if (err){ toast("Speichern fehlgeschlagen: "+err.error.message, true); btn.disabled=false; btn.textContent="Plan speichern"; return; }
+    closeModal();
+    toast(`🌙 ${selected.size} Aufgabe${selected.size===1?"":"n"} für morgen geplant`);
+    loadAll();
+  };
 }
