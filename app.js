@@ -1299,10 +1299,14 @@ function homePlanItems(){
   return items;
 }
 
+const homeCat = () => {
+  const v = localStorage.getItem("wopHomeCat") || "";
+  return S.locations.some(l=>l.name===v) ? v : "";
+};
 // "Als Nächstes" in Kategorie-Häppchen (max 3 pro Kategorie) statt einer Wand
 function homeGroupedPlan(openPlan, planRow){
   if (!openPlan.length) return "";
-  const PER_CAT = 3;
+  const PER_CAT = homeCat() ? 8 : 3;
   const groups = [];
   S.locations.filter(l=>!l.is_routine).forEach((l,i)=>{
     const arr = openPlan.filter(p=>(p.t.location||"")===l.name);
@@ -1402,10 +1406,15 @@ async function renderHome(){
     ${ routineCardsHtml() }
     ${ homeBlockRows() ? `<div class="homehead"><h2>📅 Termine heute</h2><a id="homeToPlan">Zum Plan ›</a></div>
     <div class="card">${homeBlockRows()}</div>` : "" }
-    <div class="homehead"><h2>📋 Als Nächstes</h2><div>
-      <a id="homeRandom" title="Zufällig eine wählen" style="margin-right:14px">🎲 Zufall</a>
-      <a id="homeToTasks">Alle Aufgaben ›</a></div></div>
-    ${ homeGroupedPlan(openPlan, planRow) || `<div class="card"><div class="section-empty">${totalN?"Alles erledigt – stark! 🎉":"Heute steht nichts an. Genieß den Tag ☕️"}</div></div>` }
+    <div class="homehead"><h2>📋 Als Nächstes</h2><div style="display:flex;align-items:center;gap:12px">
+      <select id="homeCatFilter" style="width:auto;padding:5px 8px;font-size:12.5px;border-radius:9px">
+        <option value="">Alle Kategorien</option>
+        ${S.locations.filter(l=>!l.is_routine).map(l=>`<option value="${esc(l.name)}" ${homeCat()===l.name?"selected":""}>${esc(l.name)}</option>`).join("")}
+      </select>
+      <a id="homeRandom" title="Zufällig eine wählen">🎲</a>
+      <a id="homeToTasks">Alle ›</a></div></div>
+    ${ homeGroupedPlan(homeCat() ? openPlan.filter(p=>(p.t.location||"")===homeCat()) : openPlan, planRow)
+      || `<div class="card"><div class="section-empty">${homeCat()?`In „${esc(homeCat())}" ist heute nichts offen ✨`:(totalN?"Alles erledigt – stark! 🎉":"Heute steht nichts an. Genieß den Tag ☕️")}</div></div>` }
     <button class="btn sec" id="planTomorrow" style="margin-top:2px">🌙 Morgen planen</button>
     ${donePlan.length?`<div class="card" style="opacity:.65;margin-top:10px">${donePlan.map(planRow).join("")}</div>`:""}
     </div>
@@ -1423,6 +1432,8 @@ async function renderHome(){
     const b=S.timeBlocks.find(x=>x.id===row.dataset.block); if(b) openBlockForm(b);
   });
   $("#homeWork").onclick = ()=>switchTab("work");
+  const hcf = $("#homeCatFilter", el);
+  if (hcf) hcf.onchange = ()=>{ localStorage.setItem("wopHomeCat", hcf.value); renderHome(); };
   $$(".homeMoreCat", el).forEach(a=>a.onclick = ()=>{
     S.locFilter = S.locations.some(l=>l.name===a.dataset.loc) ? a.dataset.loc : "ALLE";
     switchTab("tasks");
