@@ -255,12 +255,29 @@ details.moreopts[open] summary::before{content:'▾ ';}
 .locsec{cursor:pointer;user-select:none;}
 .locsec .arr{color:var(--dim2);font-size:12px;margin-left:auto;}
 
-/* Home-Sidebar (To-Do) auf breiten Screens */
+/* Home-Layout: mobil gestapelt (Wetter-Woche nach dem Hauptteil), breit als Spalten */
+#view-home{display:flex;flex-direction:column;}
+.home-main{order:1;} .home-left{order:2;} .home-side{order:3;}
 @media(min-width:980px){
   .container{max-width:1100px;}
-  #view-home{display:grid;grid-template-columns:1fr 330px;gap:18px;align-items:start;}
-  .home-side{position:sticky;top:86px;}
+  #view-home{display:grid;grid-template-columns:1fr 330px;gap:18px;align-items:start;
+    grid-template-areas:"main side" "left side";}
+  .home-main{grid-area:main;} .home-side{grid-area:side;position:sticky;top:86px;} .home-left{grid-area:left;}
 }
+@media(min-width:1280px){
+  .container{max-width:1400px;}
+  #view-home{grid-template-columns:300px 1fr 330px;grid-template-areas:"left main side";}
+  .home-left{position:sticky;top:86px;}
+}
+.wwrow{display:grid;grid-template-columns:44px 28px 1fr auto;gap:6px;align-items:center;
+  padding:7px 0;border-bottom:1px solid var(--line);font-size:13.5px;}
+.wwrow:last-child{border-bottom:none;}
+.wwrow.today .wwd{color:var(--accent2);}
+.wwd{font-weight:700;font-size:12.5px;}
+.wwi{font-size:17px;}
+.wwt{font-weight:700;} .wwt em{font-style:normal;color:var(--dim2);font-weight:500;margin-left:3px;}
+.wwm{text-align:right;font-size:11px;color:var(--dim);line-height:1.5;}
+.wwm .wwl{color:var(--teal);font-weight:700;}
 .quickadd{display:flex;gap:8px;margin-bottom:10px;}
 .quickadd input{flex:1;}
 .quickadd button{width:46px;min-width:46px;border-radius:12px;border:none;background:var(--grad);color:var(--ontint);font-size:22px;font-weight:700;cursor:pointer;}
@@ -268,6 +285,27 @@ details.moreopts[open] summary::before{content:'▾ ';}
 .todorow:last-child{border-bottom:none;}
 .todorow .tt{flex:1;font-size:14.5px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;}
 .todorow.tdone .tt{color:var(--dim);text-decoration:line-through;}
+
+/* Fokus-Modus */
+#focusView{position:fixed;inset:0;z-index:95;background:var(--bg);display:flex;flex-direction:column;
+  align-items:center;justify-content:center;padding:24px;text-align:center;}
+#focusView::before{content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background:radial-gradient(700px 500px at 50% 20%, rgba(124,108,255,.18), transparent 65%);}
+.focus-kicker{font-size:12.5px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.1em;}
+.focus-title{font-family:var(--font-display);font-size:24px;font-weight:700;margin:10px 0 6px;max-width:560px;line-height:1.4;}
+.focus-timer{font-family:var(--font-display);font-size:64px;font-weight:700;font-variant-numeric:tabular-nums;
+  background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;margin:14px 0 4px;}
+.focus-sub{font-size:13.5px;color:var(--dim);}
+.focus-bar{width:min(420px,80vw);height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin:18px 0 26px;}
+.focus-bar>div{height:100%;background:var(--grad);border-radius:4px;transition:width 1s linear;}
+.focus-btns{display:flex;flex-direction:column;gap:10px;width:min(420px,86vw);}
+.focus-choice{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:14px;width:min(420px,86vw);}
+.playbtn{background:none;border:1.5px solid var(--line);color:var(--accent2);width:34px;height:34px;min-width:34px;
+  border-radius:50%;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;margin-top:1px;}
+.frogcard{border:1.5px solid rgba(61,220,132,.4)!important;background:linear-gradient(135deg,rgba(61,220,132,.10),transparent 60%),var(--card)!important;}
+.xpline{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:12.5px;color:var(--dim);}
+.xpline b{color:var(--text);}
+.xpline .subprog{flex:1;margin:0;}
 
 /* Auth / setup */
 .center-screen{min-height:85vh;display:flex;flex-direction:column;justify-content:center;max-width:420px;margin:0 auto;padding:24px;}
@@ -360,6 +398,9 @@ code{background:var(--card2);padding:2px 6px;border-radius:6px;font-size:13px;}
     <button data-tab="stats"><span class="ico">📊</span>Statistik</button>
   </div>
 </div>
+
+<!-- Fokus-Modus (Vollbild) -->
+<div id="focusView" class="hidden"></div>
 
 <!-- Modals werden per JS gefüllt -->
 <div class="modal-bg" id="modalBg"><div class="modal" id="modalBox"></div></div>

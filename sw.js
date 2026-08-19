@@ -1,5 +1,5 @@
 // Minimaler Service Worker: cached die App-Shell, Daten kommen immer live von Supabase.
-const CACHE = "wop-shell-v14";
+const CACHE = "wop-shell-v15";
 const SHELL = ["./", "index.html", "app.js", "manifest.json", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", e => {
@@ -35,10 +35,17 @@ self.addEventListener("push", e => {
     tag: d.tag || "wop",
     icon: "icon-192.png",
     badge: "icon-192.png",
+    data: d,
+    actions: d.actions || [],
   }));
 });
 self.addEventListener("notificationclick", e => {
   e.notification.close();
+  // "✓ Erledigt"-Button: Aufgabe direkt abhaken, ohne die App zu öffnen
+  if (e.action === "done" && e.notification.data && e.notification.data.completeUrl) {
+    e.waitUntil(fetch(e.notification.data.completeUrl, { method: "POST" }).catch(() => {}));
+    return;
+  }
   e.waitUntil(clients.matchAll({ type: "window", includeUncontrolled: true }).then(list => {
     for (const c of list) if ("focus" in c) return c.focus();
     return clients.openWindow("./");

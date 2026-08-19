@@ -636,6 +636,7 @@ function openTaskForm(t){
     <label>Notizen</label><textarea id="f_notes" rows="3">${esc(t.notes||"")}</textarea>
     </details>
     <div style="height:18px"></div>
+    ${isNew?"":`<button class="btn sec" id="f_frog" style="margin-bottom:8px">🐸 Heute als Frosch des Tages</button>`}
     <button class="btn" id="f_save">${isNew?"Aufgabe anlegen":"Speichern"}</button>
     ${isNew?"":`<div style="height:8px"></div><button class="btn danger" id="f_del">Löschen</button>`}
   `);
@@ -661,6 +662,8 @@ function openTaskForm(t){
   };
   $("#f_kind").onchange = syncKind; $("#f_rec").onchange = syncKind;
 
+  const ffr = $("#f_frog");
+  if (ffr) ffr.onclick = async ()=>{ await setTodayFrog(t.id); closeModal(); };
   $("#f_save").onclick = async ()=>{
     const title = $("#f_title").value.trim();
     if (!title) return toast("Bitte einen Titel eingeben.", true);
@@ -1358,6 +1361,10 @@ async function renderHome(){
   };
 
   el.innerHTML = `
+    <div class="home-left">
+      <div class="card" id="weekWeather"><b style="font-size:13.5px">🌤 Wetter-Woche</b><div class="section-empty">lädt…</div></div>
+      ${plannedCardHtml()}
+    </div>
     <div class="home-main">
     <div class="hero">
       <div class="greet">${greetingText()}, Finn! 👋</div>
@@ -1398,9 +1405,12 @@ async function renderHome(){
     <button class="btn sec" id="planTomorrow" style="margin-top:2px">🌙 Morgen planen</button>
     ${donePlan.length?`<div class="card" style="opacity:.65;margin-top:10px">${donePlan.map(planRow).join("")}</div>`:""}
     </div>
-    <div class="home-side">${todoPanelHtml()}</div>
+    <div class="home-side">${todoPanelHtml()}${postitHtml()}</div>
   `;
   wireTodoPanel(el);
+  wirePostit(el);
+  fillWeekWeather();
+  wirePlannedCard(el);
 
   $$(".routinecard", el).forEach(c=>c.onclick=()=>openRoutine(c.dataset.loc));
   $("#homeToTasks").onclick = ()=>switchTab("tasks");
@@ -1711,12 +1721,14 @@ function openChat(){
     <div class="chatwrap">
       <div class="chatlog" id="chatLog"></div>
       <div class="chatinput">
-        <input id="chatIn" placeholder="z.B. Freitag 14 Uhr Zahnarzt eintragen…" autocomplete="off">
+        <button id="chatMic" style="background:var(--card2);color:var(--text)" title="Sprechen" aria-label="Sprechen">🎤</button>
+        <input id="chatIn" placeholder="Tippen oder 🎤 sprechen…" autocomplete="off">
         <button id="chatSend">➤</button>
       </div>
     </div>
   `);
   renderChat();
+  $("#chatMic").onclick = toggleVoice;
   $("#chatSend").onclick = sendChat;
   $("#chatIn").addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.preventDefault(); sendChat(); } });
   if (!localStorage.getItem("wopAiKey")){
@@ -1806,12 +1818,33 @@ function routineTasksFor(name){
   return open.concat(done);
 }
 
+// Skincare steckt in der Abendroutine (kein eigenes Kärtchen)
+const isSkincareLoc = name => /skincare|pflege/i.test(name);
+function mergedRoutineTasks(name){
+  let ts = routineTasksFor(name);
+  if (/evening|abend/i.test(name)){
+    S.locations.filter(l=>l.is_routine && isSkincareLoc(l.name))
+      .forEach(l=>{ ts = ts.concat(routineTasksFor(l.name)); });
+    ts = ts.filter(t=>!isCompletedToday(t)).concat(ts.filter(isCompletedToday));
+  }
+  return ts;
+}
+// Karte zeigen? Fertige Routinen verschwinden; Abend erst ab 21 Uhr; Skincare nie eigenständig
+function routineCardVisible(l, tasks){
+  if (!tasks.length) return false;
+  if (tasks.every(isCompletedToday)) return false;
+  const n = l.name.toLowerCase();
+  if (isSkincareLoc(n)) return false;
+  if (/evening|abend/.test(n)) return new Date().getHours() >= 21;
+  return true;
+}
+
 function routineCardsHtml(){
   const locs = routineLocations();
   if (!locs.length) return "";
   const cards = locs.map(l=>{
-    const tasks = routineTasksFor(l.name);
-    if (!tasks.length) return "";
+    const tasks = mergedRoutineTasks(l.name);
+    if (!routineCardVisible(l, tasks)) return "";
     const done = tasks.filter(isCompletedToday).length;
     const all = done===tasks.length;
     const m = routineMeta(l.name);
@@ -1829,7 +1862,7 @@ function routineCardsHtml(){
 }
 
 function openRoutine(name){
-  const tasks = routineTasksFor(name);
+  const tasks = mergedRoutineTasks(name);
   const m = routineMeta(name);
   const done = tasks.filter(isCompletedToday).length;
   const all = tasks.length && done===tasks.length;
@@ -2093,9 +2126,12 @@ function todoPanelHtml(){
   const open = items.filter(t=>!isCompletedToday(t))
     .sort((a,b)=>(b.is_priority-a.is_priority)||(overdueDays(b)-overdueDays(a)));
   const done = items.filter(isCompletedToday);
+  const frog = getSetting("frog", null);
+  const isFrogToday = t => frog && frog.date===dayKey(new Date()) && frog.taskId===t.id;
   const row = t => `<div class="todorow ${isCompletedToday(t)?"tdone":""}" data-id="${t.id}">
     <button class="chk ${isCompletedToday(t)?"on":""}" style="width:24px;height:24px;min-width:24px;margin:0;font-size:12px" aria-label="Erledigt">✓</button>
     <span class="tt" role="button" tabindex="0">${t.is_priority?"★ ":""}${esc(t.title)}</span>
+    <button class="iconbtn todofrog" data-frog="${t.id}" title="Heute als Frosch" style="padding:2px 4px;font-size:15px;opacity:${isFrogToday(t)?1:.25}">🐸</button>
     <span style="font-size:11.5px;color:var(--dim2)">${fmtMin(t.duration_minutes)}</span>
   </div>`;
   return `<div class="card" id="todoPanel" style="border-left:4px solid var(--accent)">
@@ -2132,6 +2168,8 @@ function wireTodoPanel(root){
     $(".chk", r).onclick = (e)=>{ e.stopPropagation();
       isCompletedToday(t) ? uncompleteToday(t) : completeTask(t); };
     $(".tt", r).onclick = ()=>openTaskForm(t);
+    const fb = $(".todofrog", r);
+    if (fb) fb.onclick = async (e)=>{ e.stopPropagation(); await setTodayFrog(t.id); };
   });
 }
 
@@ -2180,6 +2218,16 @@ function frogCardHtml(){
     <div style="font-size:12.5px;color:var(--dim);margin-bottom:12px">${fmtMin(t.duration_minutes)}${t.location?" · "+esc(t.location):""} — die eine Sache, nach der der Tag ein Erfolg ist.</div>
     <button class="btn" data-frogstart="${t.id}">▶ Jetzt angehen</button>
   </div>`;
+}
+
+
+async function setTodayFrog(taskId){
+  const today = dayKey(new Date());
+  const f = getSetting("frog", null);
+  const same = f && f.date===today && f.taskId===taskId;
+  await saveSetting("frog", same ? null : { date: today, taskId });
+  toast(same ? "Frosch entfernt" : "🐸 Frosch des Tages gesetzt!");
+  renderAll();
 }
 
 // ============================================================
@@ -2284,4 +2332,282 @@ function renderFocus(){
   if (more) more.onclick = ()=>{ const x=getFocus(); x.five=false; x.askedFive=true; setFocusState(x); renderFocus(); };
   const enough = $("#fc_enough");
   if (enough) enough.onclick = ()=>{ toast("5 Minuten sind 5 Minuten mehr als nichts. 👏"); stopFocus(); };
+}
+
+// ============================================================
+// 📒 Post-it am Heute-Screen (synct über alle Geräte)
+// ============================================================
+let _postitSaveTimer = null;
+function postitHtml(){
+  const txt = getSetting("homeNotes", "");
+  return `<div class="card" id="postit" style="background:linear-gradient(180deg,rgba(255,213,79,.14),rgba(255,213,79,.05)),var(--card);border-color:rgba(255,213,79,.35)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <b style="font-size:13.5px">📒 Notizzettel</b>
+      <span id="postitState" style="font-size:11px;color:var(--dim2)"></span>
+    </div>
+    <textarea id="postitText" rows="5" placeholder="Was dir gerade durch den Kopf geht…"
+      style="background:transparent;border:none;padding:2px;resize:vertical;font-size:14.5px;line-height:1.5">${esc(txt)}</textarea>
+  </div>`;
+}
+function wirePostit(root){
+  const ta = $("#postitText", root); if (!ta) return;
+  ta.addEventListener("input", ()=>{
+    $("#postitState").textContent = "…";
+    clearTimeout(_postitSaveTimer);
+    _postitSaveTimer = setTimeout(async ()=>{
+      await saveSetting("homeNotes", ta.value);
+      const st = $("#postitState"); if (st){ st.textContent = "✓ gespeichert"; setTimeout(()=>{ if(st.isConnected) st.textContent=""; }, 2000); }
+    }, 800);
+  });
+}
+
+// ============================================================
+// 🎤 Sprach-Eingabe (Safari/Chrome-Erkennung, sonst Whisper)
+// ============================================================
+let _voiceRec = null, _mediaRec = null, _voiceChunks = [];
+function voiceBtnState(active){
+  const b = $("#chatMic"); if (!b) return;
+  b.textContent = active ? "⏺" : "🎤";
+  b.style.background = active ? "var(--red)" : "var(--card2)";
+  b.style.color = active ? "#fff" : "var(--text)";
+}
+function toggleVoice(){
+  if (_voiceRec || _mediaRec) return stopVoice();
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SR){
+    _voiceRec = new SR();
+    _voiceRec.lang = "de-DE";
+    _voiceRec.interimResults = false;
+    _voiceRec.onresult = e=>{
+      const text = e.results[0][0].transcript;
+      _voiceRec = null; voiceBtnState(false);
+      const inp = $("#chatIn"); if (inp){ inp.value = text; sendChat(); }
+    };
+    _voiceRec.onerror = e=>{
+      _voiceRec = null; voiceBtnState(false);
+      if (e.error==="not-allowed") toast("Mikrofon nicht erlaubt.", true);
+      else whisperRecord(); // Fallback über OpenAI
+    };
+    _voiceRec.onend = ()=>{ if (_voiceRec){ _voiceRec = null; voiceBtnState(false); } };
+    try { _voiceRec.start(); voiceBtnState(true); toast("🎤 Sprich – ich höre zu…"); }
+    catch(e){ _voiceRec = null; whisperRecord(); }
+  } else {
+    whisperRecord();
+  }
+}
+function stopVoice(){
+  if (_voiceRec){ try{ _voiceRec.stop(); }catch(e){} _voiceRec=null; voiceBtnState(false); }
+  if (_mediaRec && _mediaRec.state!=="inactive") _mediaRec.stop(); // onstop transkribiert
+}
+async function whisperRecord(){
+  const key = localStorage.getItem("wopAiKey");
+  if (!key) return toast("Für Sprache erst den OpenAI-Key in ⚙️ speichern.", true);
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+    _voiceChunks = [];
+    _mediaRec = new MediaRecorder(stream);
+    _mediaRec.ondataavailable = e=>{ if (e.data.size) _voiceChunks.push(e.data); };
+    _mediaRec.onstop = async ()=>{
+      stream.getTracks().forEach(tr=>tr.stop());
+      voiceBtnState(false);
+      const blob = new Blob(_voiceChunks, { type: _mediaRec.mimeType || "audio/webm" });
+      _mediaRec = null;
+      if (blob.size < 1500) return;
+      toast("Transkribiere…");
+      try {
+        const fd = new FormData();
+        fd.append("file", blob, "audio.webm");
+        fd.append("model", "whisper-1");
+        fd.append("language", "de");
+        const r = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+          method:"POST", headers:{ "Authorization":"Bearer "+key }, body: fd });
+        const d = await r.json();
+        if (d.error) throw new Error(d.error.message);
+        const inp = $("#chatIn");
+        if (inp && d.text){ inp.value = d.text.trim(); sendChat(); }
+      } catch(e){ toast("Transkription fehlgeschlagen: "+(e.message||e), true); }
+    };
+    _mediaRec.start();
+    voiceBtnState(true);
+    toast("⏺ Aufnahme läuft – zum Stoppen nochmal tippen");
+  } catch(e){ toast("Mikrofon nicht verfügbar: "+(e.message||e), true); }
+}
+
+// ============================================================
+// 🌤 Wetter-Woche mit Reise-Logik
+// (Fahrt-Blöcke wie "Salzburg → Wien" verschieben den Wetter-Ort)
+// ============================================================
+function travelDest(title){
+  if (!title) return null;
+  let parts = String(title).split(/→|->|➔|⇒/);
+  if (parts.length > 1) return parts[parts.length-1].trim().replace(/[^\p{L} .-]/gu,"").trim() || null;
+  const m = String(title).match(/nach\s+([\p{L} .-]+)/iu);
+  return m ? m[1].trim() : null;
+}
+async function geocodeCity(name){
+  let cache = {};
+  try { cache = JSON.parse(localStorage.getItem("wopCityCache")||"{}"); } catch(e){}
+  const k = name.toLowerCase();
+  if (cache[k]) return cache[k];
+  try {
+    const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(name)}&count=1&language=de&format=json`);
+    const d = await r.json();
+    if (d.results && d.results[0]){
+      const c = { lat:+d.results[0].latitude.toFixed(3), lon:+d.results[0].longitude.toFixed(3), name:d.results[0].name };
+      cache[k] = c;
+      localStorage.setItem("wopCityCache", JSON.stringify(cache));
+      return c;
+    }
+  } catch(e){}
+  return null;
+}
+let _weekWx = { sig:"", ts:0, html:"" };
+async function fillWeekWeather(){
+  const el = $("#weekWeather"); if (!el) return;
+  let base = null;
+  try { base = JSON.parse(localStorage.getItem("wopGeo")||"null"); } catch(e){}
+  if (!base){
+    el.innerHTML = `<b style="font-size:13.5px">🌤 Wetter-Woche</b>
+      <div class="section-empty">Oben zuerst den Wetter-Standort aktivieren.</div>`;
+    return;
+  }
+  // Reiseplan der nächsten 7 Tage als Cache-Schlüssel
+  const travelSig = [];
+  for (let i=0;i<7;i++){
+    const d = new Date(); d.setDate(d.getDate()+i);
+    blocksFor(dayKey(d)).filter(b=>b.type==="travel").forEach(b=>travelSig.push(dayKey(d)+b.title));
+  }
+  const sig = base.lat+","+base.lon+"|"+travelSig.join(";");
+  if (_weekWx.html && _weekWx.sig===sig && Date.now()-_weekWx.ts < 30*60000){
+    el.innerHTML = _weekWx.html; wireWeekWeather(el); return;
+  }
+
+  // Ort pro Tag bestimmen (Fahrt-Ziel gilt ab dem Reisetag)
+  let cur = { lat:base.lat, lon:base.lon, name: base.name||"Standort" };
+  const days = [];
+  for (let i=0;i<7;i++){
+    const d = new Date(); d.setDate(d.getDate()+i);
+    const dk = dayKey(d);
+    for (const tb of blocksFor(dk).filter(b=>b.type==="travel").sort((a,b)=>a.start_min-b.start_min)){
+      const dest = travelDest(tb.title);
+      if (dest){ const g = await geocodeCity(dest); if (g) cur = g; }
+    }
+    days.push({ d, dk, loc: cur });
+  }
+  // Wetter je Ort (dedupliziert) holen
+  const uniq = {};
+  days.forEach(x=>{ uniq[x.loc.lat+","+x.loc.lon] = x.loc; });
+  const wx = {};
+  await Promise.all(Object.entries(uniq).map(async ([k,loc])=>{
+    try {
+      const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code&timezone=auto&forecast_days=8`);
+      const d = await r.json();
+      const map = {};
+      (d.daily && d.daily.time || []).forEach((t,i)=>{ map[t] = { max:d.daily.temperature_2m_max[i],
+        min:d.daily.temperature_2m_min[i], rain:d.daily.precipitation_probability_max[i], code:d.daily.weather_code[i] }; });
+      wx[k] = map;
+    } catch(e){ wx[k] = null; }
+  }));
+
+  const rows = days.map((x,i)=>{
+    const m = wx[x.loc.lat+","+x.loc.lon];
+    const v = m && m[x.dk];
+    const [ico] = v ? (WMO[v.code]||["🌡"]) : ["·"];
+    const locChanged = i>0 && days[i-1].loc.name !== x.loc.name;
+    const showLoc = i===0 || locChanged;
+    return `<div class="wwrow ${i===0?"today":""}">
+      <span class="wwd">${i===0?"Heute":(i===1?"Morgen":WEEKDAYS_DE[x.d.getDay()]+" "+x.d.getDate()+".")}</span>
+      <span class="wwi">${ico}</span>
+      <span class="wwt">${v?Math.round(v.max)+"°":"–"}<em>${v?"/"+Math.round(v.min)+"°":""}</em></span>
+      <span class="wwm">${v&&v.rain?"☔️ "+v.rain+"%":""}${showLoc?`${v&&v.rain?"<br>":""}<span class="wwl">${locChanged?"✈️ ":"📍 "}${esc(x.loc.name)}</span>`:""}</span>
+    </div>`;
+  }).join("");
+  const html = `<b style="font-size:13.5px">🌤 Wetter-Woche</b><div style="margin-top:6px">${rows}</div>
+    <div style="font-size:10.5px;color:var(--dim2);margin-top:8px">✈️ = Ort wechselt laut Kalender (Fahrt-Block „A → B")</div>`;
+  _weekWx = { sig, ts: Date.now(), html };
+  el.innerHTML = html;
+  wireWeekWeather(el);
+}
+function wireWeekWeather(el){ /* aktuell keine Interaktionen nötig */ }
+
+// ============================================================
+// 📅 "Geplant"-Karte links: Heute / Woche / Monat
+// ============================================================
+function plannedCardHtml(){
+  const mode = localStorage.getItem("wopPlannedView") || "today";
+  const seg = `<div class="seg" id="plSeg" style="margin:8px 0 8px;padding:2px">
+    ${[["today","Heute"],["week","Woche"],["month","Monat"]].map(([v,l])=>
+      `<button data-v="${v}" class="${mode===v?"active":""}" style="padding:6px 0;font-size:12px">${l}</button>`).join("")}
+  </div>`;
+  const blockRow = b => {
+    const t = BLOCK_TYPES[b.type]||BLOCK_TYPES.event;
+    return `<div class="planrow" data-pblock="${b.id}" role="button" tabindex="0" style="padding:7px 0">
+      <span class="ptime" style="min-width:40px">${minToHM(b.start_min)}</span>
+      <span style="width:8px;height:8px;min-width:8px;border-radius:50%;background:${blockColor(b)}"></span>
+      <span class="pt" style="font-size:13.5px">${esc(b.title||t.label)}</span>
+      <span class="pm">${minToHM(b.end_min)}</span>
+    </div>`;
+  };
+  let body = "";
+
+  if (mode === "today"){
+    const blocks = blocksFor(dayKey(new Date())).filter(b=>b.type!=="sleep");
+    body = blocks.map(blockRow).join("") || `<div class="section-empty" style="padding:6px 0">Heute keine Termine 🎈</div>`;
+  }
+  else if (mode === "week"){
+    const parts = [];
+    for (let i=0;i<7;i++){
+      const d = new Date(); d.setDate(d.getDate()+i);
+      const blocks = blocksFor(dayKey(d)).filter(b=>b.type!=="sleep");
+      if (!blocks.length) continue;
+      parts.push(`<div style="font-size:11px;font-weight:800;color:${i===0?"var(--accent2)":"var(--dim2)"};
+        text-transform:uppercase;letter-spacing:.06em;margin:${parts.length?"10px":"0"} 0 2px">
+        ${i===0?"Heute":i===1?"Morgen":WEEKDAYS_DE[d.getDay()]+", "+d.getDate()+"."}</div>` + blocks.map(blockRow).join(""));
+    }
+    body = parts.join("") || `<div class="section-empty" style="padding:6px 0">Diese Woche ist frei 🎈</div>`;
+  }
+  else { // month
+    const now = new Date();
+    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+    const lead = (first.getDay()+6)%7; // Montag-basiert
+    let cells = `<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;text-align:center">`;
+    ["Mo","Di","Mi","Do","Fr","Sa","So"].forEach(w=>cells+=`<div style="font-size:9.5px;font-weight:800;color:var(--dim2);padding:2px 0">${w}</div>`);
+    for (let i=0;i<lead;i++) cells += `<div></div>`;
+    for (let day=1; day<=daysInMonth; day++){
+      const d = new Date(now.getFullYear(), now.getMonth(), day);
+      const dk = dayKey(d);
+      const blocks = blocksFor(dk).filter(b=>b.type!=="sleep");
+      const isT = dk===dayKey(now);
+      const dots = blocks.slice(0,3).map(b=>`<i style="width:4px;height:4px;border-radius:50%;background:${blockColor(b)}"></i>`).join("");
+      cells += `<div data-pday="${dk}" role="button" tabindex="0" style="padding:4px 0 3px;border-radius:8px;cursor:pointer;
+        ${isT?"background:var(--card2);":""}${blocks.length?"":"opacity:.55;"}">
+        <div style="font-size:12px;font-weight:${isT?"800":"600"};color:${isT?"var(--accent2)":"var(--text)"}">${day}</div>
+        <div style="display:flex;gap:2px;justify-content:center;height:5px;margin-top:1px">${dots}</div>
+      </div>`;
+    }
+    cells += `</div>`;
+    body = `<div style="font-size:12px;font-weight:700;color:var(--dim);margin-bottom:4px;text-transform:capitalize">
+      ${now.toLocaleDateString("de-DE",{month:"long",year:"numeric"})}</div>` + cells
+      + `<div style="font-size:10.5px;color:var(--dim2);margin-top:7px">Tag antippen → öffnet den Plan</div>`;
+  }
+
+  return `<div class="card" id="plannedCard">
+    <b style="font-size:13.5px">📅 Geplant</b>${seg}${body}
+  </div>`;
+}
+function wirePlannedCard(root){
+  const card = $("#plannedCard", root); if (!card) return;
+  $$("#plSeg button", card).forEach(b=>b.onclick = ()=>{
+    localStorage.setItem("wopPlannedView", b.dataset.v);
+    renderHome();
+  });
+  $$("[data-pblock]", card).forEach(r=>r.onclick = ()=>{
+    const b = S.timeBlocks.find(x=>x.id===r.dataset.pblock);
+    if (b) openBlockForm(b);
+  });
+  $$("[data-pday]", card).forEach(c=>c.onclick = ()=>{
+    S.planDate = c.dataset.pday;
+    switchTab("plan");
+  });
 }
