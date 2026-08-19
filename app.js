@@ -265,17 +265,19 @@ async function completeTask(t){
       toast("Speichern fehlgeschlagen (offline?): "+error.message, true);
       return;
     }
-    const { error: cErr } = await sb.from("completions").insert({ task_id:t.id, title:t.title, minutes:t.duration_minutes });
+    const spentMin = (arguments.length>1 && arguments[1]>0) ? Math.round(arguments[1]) : t.duration_minutes;
+    const { error: cErr } = await sb.from("completions").insert({ task_id:t.id, title:t.title, minutes:spentMin });
     if (cErr) toast("Statistik nicht gespeichert: "+cErr.message, true);
+    const xpGain = xpForCompletion(spentMin, t.is_priority);
     // Arbeitszeit automatisch buchen – aber nur, wenn die Stempeluhr NICHT läuft (sonst doppelt)
     const loc = S.locations.find(l => l.name.toLowerCase() === (t.location||"").toLowerCase());
     if (loc && loc.is_work_location && !runningEntry()){
       const end = new Date();
       const start = new Date(end - Math.max(1,t.duration_minutes)*60000);
       const { error: wErr } = await sb.from("work_entries").insert({ start_time:start.toISOString(), end_time:end.toISOString(), notes:"Task: "+t.title });
-      toast(wErr ? "Arbeitszeit nicht gebucht: "+wErr.message : `✓ Erledigt – ${fmtMin(t.duration_minutes)} Arbeitszeit gebucht`, !!wErr);
+      toast(wErr ? "Arbeitszeit nicht gebucht: "+wErr.message : `✓ Erledigt · +${xpGain} XP – Arbeitszeit gebucht`, !!wErr);
     } else {
-      toast(fullyDone ? "✓ Erledigt!" : `✓ ${count}/${t.repeat_count} geschafft`);
+      toast(fullyDone ? `✓ Erledigt · +${xpGain} XP` : `✓ ${count}/${t.repeat_count} · +${xpGain} XP`);
     }
     loadAll();
   } finally { _completing.delete(t.id); }
@@ -388,6 +390,7 @@ function taskRow(t){
       <div class="meta">${meta.join(" ")}</div>
       ${subHtml}
     </div>
+    ${(!done && !blocked) ? `<button class="playbtn" data-play="${t.id}" title="Fokus starten" aria-label="Fokus starten">▶</button>` : ""}
   </div>`;
 }
 
@@ -456,6 +459,8 @@ function renderTasks(){
       if (isCompletedToday(t)) uncompleteToday(t);
       else completeTask(t);
     };
+    const pb = $("[data-play]", row);
+    if (pb) pb.onclick = (e)=>{ e.stopPropagation(); startFocusTask(t.id); };
     $(".main", row).onclick = (e)=>{
       if (e.target.closest(".subrow")){
         toggleSubtask(t, e.target.closest(".subrow").dataset.sub); return;
@@ -553,7 +558,7 @@ function startApp(){
   $("#btnChat").onclick = openChat;
   $("#btnSettings").onclick = openSettings;
   initRealtime();
-  loadAll();
+  loadAll().then(()=>{ if (getFocus()) showFocus(); });
   // Ticker für laufende Stempeluhr & Cooldowns
   S.tickTimer = setInterval(()=>{ if(S.tab==="work") renderWork(); if(S.tab==="home") renderHome(); }, 30000);
   setInterval(()=>{
@@ -1167,6 +1172,8 @@ async function importBackup(json){
   const err = results.find(r=>r && r.error);
   if (err) { toast("Import-Fehler: "+err.error.message, true); return; }
 
+  if (json.stats && json.stats.totalXP && !getSetting("xpBase", 0))
+    await saveSetting("xpBase", json.stats.totalXP);
   closeModal();
   toast(`✓ Import fertig: ${m.tasks.length} Aufgaben, ${newLocs.length} neue Orte, ${m.work_entries.length} Arbeitszeiten, ${m.time_blocks.length} Kalender-Blöcke`);
   loadAll();
@@ -1356,7 +1363,9 @@ async function renderHome(){
       <div class="greet">${greetingText()}, Finn! 👋</div>
       <div class="date">${dateStr}</div>
       ${streak>0?`<div class="streakline">🔥 ${streak} Tage-Streak – weiter so!</div>`:""}
+      ${xpLineHtml()}
     </div>
+    ${frogCardHtml()}
 
     <div class="card" id="weatherCard"><div class="section-empty">Wetter lädt…</div></div>
 
@@ -1382,7 +1391,9 @@ async function renderHome(){
     ${ routineCardsHtml() }
     ${ homeBlockRows() ? `<div class="homehead"><h2>📅 Termine heute</h2><a id="homeToPlan">Zum Plan ›</a></div>
     <div class="card">${homeBlockRows()}</div>` : "" }
-    <div class="homehead"><h2>📋 Als Nächstes</h2><a id="homeToTasks">Alle Aufgaben ›</a></div>
+    <div class="homehead"><h2>📋 Als Nächstes</h2><div>
+      <a id="homeRandom" title="Zufällig eine wählen" style="margin-right:14px">🎲 Zufall</a>
+      <a id="homeToTasks">Alle Aufgaben ›</a></div></div>
     ${ homeGroupedPlan(openPlan, planRow) || `<div class="card"><div class="section-empty">${totalN?"Alles erledigt – stark! 🎉":"Heute steht nichts an. Genieß den Tag ☕️"}</div></div>` }
     <button class="btn sec" id="planTomorrow" style="margin-top:2px">🌙 Morgen planen</button>
     ${donePlan.length?`<div class="card" style="opacity:.65;margin-top:10px">${donePlan.map(planRow).join("")}</div>`:""}
@@ -1403,6 +1414,14 @@ async function renderHome(){
     switchTab("tasks");
   });
   const pt = $("#planTomorrow"); if (pt) pt.onclick = openPlanTomorrow;
+  const rnd = $("#homeRandom"); if (rnd) rnd.onclick = ()=>{
+    const cand = homePlanItems().filter(p=>!p.done && dependencySatisfied(p.t) && !inCooldown(p.t));
+    if (!cand.length) return toast("Nichts offen – genieß es!");
+    const pick = cand[Math.floor(Math.random()*cand.length)].t;
+    startFocusTask(pick.id);
+  };
+  const fc = $(".frogcard", el);
+  if (fc){ const fb = $("[data-frogstart]", fc); if (fb) fb.onclick = ()=>startFocusTask(fb.dataset.frogstart); }
   $$(".planrow[data-id]", el).forEach(row=>{
     const t = S.tasks.find(x=>x.id===row.dataset.id);
     const chk = $("[data-chk]", row);
@@ -1832,8 +1851,15 @@ function openRoutine(name){
         </div>` }
     <div style="margin-top:10px">${rows || `<div class="section-empty">Keine Schritte – lege Aufgaben mit Ort „${esc(name)}" an.</div>`}</div>
     <div style="height:14px"></div>
+    ${ tasks.filter(t=>!isCompletedToday(t)).length ? `<button class="btn" id="rt_start" style="background:${m.color};color:#0d1017">▶ Der Reihe nach starten</button><div style="height:8px"></div>` : "" }
     <button class="btn sec" id="rt_add">+ Schritt hinzufügen</button>
   `);
+  const rs = $("#rt_start");
+  if (rs) rs.onclick = ()=>{
+    const queue = tasks.filter(t=>!isCompletedToday(t)).map(t=>t.id);
+    closeModal();
+    startFocusTask(queue[0], { queue: queue.slice(1), label: name });
+  };
   $$("#modalBox .subrow").forEach(row=>{
     row.onclick = async ()=>{
       const t = S.tasks.find(x=>x.id===row.dataset.id);
@@ -1979,12 +2005,15 @@ function openPlanTomorrow(){
   const selected = new Set(candidates.filter(t => t.scheduled_date && dayKey(new Date(t.scheduled_date))===tomKey).map(t=>t.id));
   const original = new Set(selected);
 
+  const savedFrog = getSetting("frog", null);
+  let frogSel = (savedFrog && savedFrog.date===tomKey) ? savedFrog.taskId : null;
   const rowHtml = t => {
     const on = selected.has(t.id);
     return `<div class="subrow ${on?"on":""}" data-id="${t.id}" style="padding:10px 0;font-size:15px;border-bottom:1px solid var(--line)">
       <span class="box" style="width:24px;height:24px;min-width:24px;border-radius:7px;font-size:13px">✓</span>
       <span style="flex:1">${t.is_priority?"★ ":""}${esc(t.title)}</span>
       <span style="font-size:12px;color:var(--dim)">${esc(t.location||"")} · ${fmtMin(t.duration_minutes)}</span>
+      <button class="iconbtn frogbtn" data-frog="${t.id}" title="Frosch des Tages" style="padding:4px 6px;font-size:16px;opacity:${frogSel===t.id?1:.3}">🐸</button>
     </div>`;
   };
   const totalMin = () => candidates.filter(t=>selected.has(t.id)).reduce((a,t)=>a+t.duration_minutes,0);
@@ -1997,15 +2026,27 @@ function openPlanTomorrow(){
     <style>#pt_list .subrow.on span{text-decoration:none;color:var(--text);}</style>
     <div style="position:sticky;top:-20px;background:var(--bg2);padding:6px 0;z-index:5;font-size:13px;font-weight:700" id="pt_count"></div>
     <div id="pt_list">${candidates.map(rowHtml).join("") || `<div class="section-empty">Keine offenen Aufgaben.</div>`}</div>
+    <label>🧠 Brain Dump – alles raus aus dem Kopf (eine Zeile = eine neue Aufgabe für morgen)</label>
+    <textarea id="pt_dump" rows="3" placeholder="Paket abholen&#10;Mama zurückrufen&#10;…"></textarea>
     <div style="height:16px"></div>
     <button class="btn" id="pt_save">Plan speichern</button>
   `);
   const updateCount = ()=>{ $("#pt_count").textContent = `${selected.size} ausgewählt · ca. ${fmtMin(totalMin())}`; };
   updateCount();
   $$("#pt_list .subrow").forEach(row=>{
-    row.onclick = ()=>{
+    const fb = $(".frogbtn", row);
+    fb.onclick = (e)=>{
+      e.stopPropagation();
+      frogSel = (frogSel===fb.dataset.frog) ? null : fb.dataset.frog;
+      if (frogSel) selected.add(row.dataset.id), row.classList.add("on");
+      $$("#pt_list .frogbtn").forEach(x=>x.style.opacity = (frogSel===x.dataset.frog) ? 1 : .3);
+      updateCount();
+    };
+    row.onclick = (e)=>{
+      if (e.target.closest(".frogbtn")) return;
       const id = row.dataset.id;
       selected.has(id) ? selected.delete(id) : selected.add(id);
+      if (!selected.has(id) && frogSel===id){ frogSel=null; $(".frogbtn",row).style.opacity=.3; }
       row.classList.toggle("on", selected.has(id));
       updateCount();
     };
@@ -2020,11 +2061,19 @@ function openPlanTomorrow(){
       if (!now && was)
         jobs.push(sb.from("tasks").update({ scheduled_date: null, has_scheduled_time:false }).eq("id", t.id));
     }
+    // Brain Dump: jede Zeile -> neue To-Do-Aufgabe für morgen
+    const dumpLines = ($("#pt_dump").value||"").split("\n").map(x=>x.trim()).filter(Boolean);
+    for (const line of dumpLines){
+      jobs.push(sb.from("tasks").insert({ title: line, duration_minutes: 15,
+        location: todoLocationName(), kind:"oneOff",
+        scheduled_date: tomKey+"T09:00:00", has_scheduled_time:false }));
+    }
     const res = await Promise.all(jobs);
     const err = res.find(r=>r.error);
     if (err){ toast("Speichern fehlgeschlagen: "+err.error.message, true); btn.disabled=false; btn.textContent="Plan speichern"; return; }
+    await saveSetting("frog", frogSel ? { date: tomKey, taskId: frogSel } : null);
     closeModal();
-    toast(`🌙 ${selected.size} Aufgabe${selected.size===1?"":"n"} für morgen geplant`);
+    toast(`🌙 ${selected.size + dumpLines.length} Aufgabe${(selected.size+dumpLines.length)===1?"":"n"} für morgen geplant${frogSel?" · 🐸 Frosch gesetzt":""}`);
     loadAll();
   };
 }
@@ -2084,4 +2133,155 @@ function wireTodoPanel(root){
       isCompletedToday(t) ? uncompleteToday(t) : completeTask(t); };
     $(".tt", r).onclick = ()=>openTaskForm(t);
   });
+}
+
+// ============================================================
+// ⭐ XP & Level
+// ============================================================
+function xpForCompletion(minutes, isPriority){
+  return 10 + Math.min(minutes||0, 120) * 2 + (isPriority ? 15 : 0);
+}
+function totalXP(){
+  const base = getSetting("xpBase", 0) || 0;
+  return base + S.completions.reduce((a,c)=>a + 10 + Math.min(c.minutes||0,120)*2, 0);
+}
+function levelInfo(){
+  const xp = totalXP();
+  const level = Math.floor(Math.sqrt(xp/60)) + 1;          // Level 1 ab 0 XP
+  const prevReq = 60*(level-1)*(level-1);
+  const nextReq = 60*level*level;
+  const pct = Math.min(100, 100*(xp-prevReq)/Math.max(1,(nextReq-prevReq)));
+  return { xp, level, nextReq, pct };
+}
+function xpLineHtml(){
+  const li = levelInfo();
+  return `<div class="xpline">
+    <b>⭐ Level ${li.level}</b>
+    <div class="subprog"><div style="width:${li.pct}%"></div></div>
+    <span>${li.xp.toLocaleString("de-DE")} XP</span>
+  </div>`;
+}
+
+// ============================================================
+// 🐸 Frosch des Tages
+// ============================================================
+function todayFrog(){
+  const f = getSetting("frog", null);
+  if (!f || f.date !== dayKey(new Date())) return null;
+  const t = S.tasks.find(x=>x.id===f.taskId && !x.is_archived);
+  return (t && !isCompletedToday(t)) ? t : null;
+}
+function frogCardHtml(){
+  const t = todayFrog();
+  if (!t) return "";
+  return `<div class="card frogcard">
+    <div style="font-size:11.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--green)">🐸 Frosch des Tages</div>
+    <div style="font-family:var(--font-display);font-size:17px;font-weight:700;margin:7px 0 4px">${esc(t.title)}</div>
+    <div style="font-size:12.5px;color:var(--dim);margin-bottom:12px">${fmtMin(t.duration_minutes)}${t.location?" · "+esc(t.location):""} — die eine Sache, nach der der Tag ein Erfolg ist.</div>
+    <button class="btn" data-frogstart="${t.id}">▶ Jetzt angehen</button>
+  </div>`;
+}
+
+// ============================================================
+// 🎯 Fokus-Modus (mit "Nur 5 Minuten" und Routine-Warteschlange)
+// ============================================================
+let _focusTimer = null;
+const getFocus = () => { try { return JSON.parse(localStorage.getItem("wopFocus")||"null"); } catch(e){ return null; } };
+const setFocusState = f => f ? localStorage.setItem("wopFocus", JSON.stringify(f)) : localStorage.removeItem("wopFocus");
+
+function startFocusTask(taskId, opts={}){
+  const t = S.tasks.find(x=>x.id===taskId);
+  if (!t) return;
+  _focusDomKey = null;
+  setFocusState({ taskId, start: Date.now(), five: !!opts.five,
+    queue: opts.queue||[], label: opts.label||"", askedFive:false });
+  showFocus();
+}
+function stopFocus(){
+  _focusDomKey = null;
+  setFocusState(null);
+  clearInterval(_focusTimer); _focusTimer = null;
+  $("#focusView").classList.add("hidden");
+  document.body.style.overflow = "";
+  renderAll();
+}
+function showFocus(){
+  const f = getFocus(); if (!f) return;
+  $("#focusView").classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+  clearInterval(_focusTimer);
+  renderFocus();
+  _focusTimer = setInterval(renderFocus, 1000);
+}
+let _focusDomKey = null;
+function renderFocus(){
+  const f = getFocus(); if (!f) return stopFocus();
+  const t = S.tasks.find(x=>x.id===f.taskId);
+  const el = $("#focusView");
+  if (!t){ stopFocus(); return; }
+  const elapsed = Math.floor((Date.now()-f.start)/1000);
+  const mm = Math.floor(elapsed/60), ss = elapsed%60;
+  const targetMin = f.five ? 5 : Math.max(1, t.duration_minutes);
+  const pct = Math.min(100, 100*elapsed/(targetMin*60));
+  const over = elapsed > targetMin*60;
+  const fiveChoice = f.five && over && !f.askedFive;
+
+  // Nur bei Zustandswechsel den DOM neu bauen – sonst nur Timer/Balken updaten.
+  // (Voll-Rerender jede Sekunde würde Taps verschlucken, die genau dann passieren.)
+  const domKey = [f.taskId, f.five, fiveChoice, f.queue.length, over, (!f.five && elapsed<60)].join("|");
+  if (domKey === _focusDomKey){
+    const tm = $(".focus-timer", el); if (tm) tm.textContent = `${pad(mm)}:${pad(ss)}`;
+    const sub = $(".focus-sub", el);
+    if (sub) sub.textContent = over ? `+${fmtMin(Math.ceil(elapsed/60 - targetMin))} über Plan (${fmtMin(targetMin)})` : `Ziel: ${fmtMin(targetMin)}`;
+    const bar = $(".focus-bar>div", el); if (bar) bar.style.width = pct+"%";
+    return;
+  }
+  _focusDomKey = domKey;
+
+  el.innerHTML = `
+    ${f.label?`<div class="focus-kicker">${esc(f.label)} · noch ${f.queue.length+1} Schritt${f.queue.length?"e":""}</div>`:`<div class="focus-kicker">${f.five?"Nur 5 Minuten":"Fokus"}</div>`}
+    <div class="focus-title">${esc(t.title)}</div>
+    <div class="focus-timer">${pad(mm)}:${pad(ss)}</div>
+    <div class="focus-sub">${over?`+${fmtMin(Math.ceil(elapsed/60 - targetMin))} über Plan (${fmtMin(targetMin)})`:`Ziel: ${fmtMin(targetMin)}`}</div>
+    <div class="focus-bar"><div style="width:${pct}%"></div></div>
+    ${fiveChoice ? `<div class="focus-choice">
+      <b>5 Minuten geschafft! 💪</b>
+      <div style="font-size:13px;color:var(--dim);margin:6px 0 12px">Du bist drin – weitermachen? Oder ehrenvoll aufhören, zählt beides.</div>
+      <button class="btn" id="fc_more">🔥 Weitermachen</button>
+      <div style="height:8px"></div>
+      <button class="btn sec" id="fc_enough">Genug für heute</button>
+    </div>` : `<div class="focus-btns">
+      <button class="btn" id="fc_done" style="background:var(--green);color:#08351d">✓ Fertig!</button>
+      ${!f.five && elapsed<60 ? `<button class="btn sec" id="fc_five">⏱ Nur 5 Minuten draus machen</button>` : ""}
+      <button class="btn sec" id="fc_cancel">Abbrechen</button>
+    </div>`}
+  `;
+
+  const done = $("#fc_done");
+  if (done) done.onclick = async ()=>{
+    const spent = Math.max(1, Math.round((Date.now()-f.start)/60000));
+    clearInterval(_focusTimer);
+    await completeTask(t, spent);
+    const queue = (f.queue||[]).filter(id=>{
+      const q = S.tasks.find(x=>x.id===id);
+      return q && !isCompletedToday(q);
+    });
+    if (queue.length){
+      startFocusTask(queue[0], { queue: queue.slice(1), label: f.label });
+    } else {
+      setFocusState(null);
+      $("#focusView").classList.add("hidden");
+      document.body.style.overflow = "";
+      if (f.label) toast(`🎉 ${f.label} komplett geschafft!`);
+      renderAll();
+    }
+  };
+  const five = $("#fc_five");
+  if (five) five.onclick = ()=>{ const x=getFocus(); x.five=true; setFocusState(x); renderFocus(); };
+  const cancel = $("#fc_cancel");
+  if (cancel) cancel.onclick = stopFocus;
+  const more = $("#fc_more");
+  if (more) more.onclick = ()=>{ const x=getFocus(); x.five=false; x.askedFive=true; setFocusState(x); renderFocus(); };
+  const enough = $("#fc_enough");
+  if (enough) enough.onclick = ()=>{ toast("5 Minuten sind 5 Minuten mehr als nichts. 👏"); stopFocus(); };
 }
