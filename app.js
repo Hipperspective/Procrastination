@@ -13,6 +13,18 @@ if (!configured) {
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// ---------- Theme (Auto / Hell / Dunkel) ----------
+function applyTheme(){
+  const pref = localStorage.getItem("wopTheme") || "auto"; // auto|light|dark
+  const sysLight = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
+  const mode = pref==="auto" ? (sysLight ? "light" : "dark") : pref;
+  document.documentElement.setAttribute("data-theme", mode);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", mode==="light" ? "#faf7f1" : "#0a0c13");
+}
+applyTheme();
+if (window.matchMedia) window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", applyTheme);
+
 // ---------- State ----------
 const S = {
   user: null,
@@ -50,9 +62,11 @@ const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+
 function toast(msg, isErr){
   let t = $("#toastEl");
   if(!t){ t=document.createElement("div"); t.id="toastEl";
-    t.style.cssText="position:fixed;left:50%;transform:translateX(-50%);bottom:calc(96px + env(safe-area-inset-bottom,0px));background:#2a3348;color:#fff;padding:10px 18px;border-radius:12px;font-size:14px;z-index:200;transition:opacity .3s;max-width:85%;text-align:center;";
+    t.style.cssText="position:fixed;left:50%;transform:translateX(-50%);bottom:calc(96px + env(safe-area-inset-bottom,0px));background:var(--card2);color:var(--text);border:1px solid var(--line);padding:10px 18px;border-radius:12px;font-size:14px;z-index:200;transition:opacity .3s;max-width:85%;text-align:center;box-shadow:0 4px 18px rgba(0,0,0,.25);";
     document.body.appendChild(t); }
-  t.textContent = msg; t.style.background = isErr ? "#8c2f39" : "#2a3348";
+  t.textContent = msg;
+  t.style.background = isErr ? "#8c2f39" : "var(--card2)";
+  t.style.color = isErr ? "#fff" : "var(--text)";
   t.style.opacity = "1";
   clearTimeout(t._h); t._h = setTimeout(()=>t.style.opacity="0", 2600);
 }
@@ -952,8 +966,15 @@ function openSettings(){
         <button class="iconbtn" data-act="del" title="Löschen">🗑</button>
       </div>
     </div>`).join("");
+  const themePref = localStorage.getItem("wopTheme") || "auto";
   openModal(`
     <h3>Einstellungen</h3>
+    <label>🎨 Erscheinungsbild</label>
+    <div class="seg" id="s_theme" style="margin-top:4px">
+      <button data-v="auto" class="${themePref==="auto"?"active":""}">Auto</button>
+      <button data-v="light" class="${themePref==="light"?"active":""}">🌸 Hell</button>
+      <button data-v="dark" class="${themePref==="dark"?"active":""}">🌙 Dunkel</button>
+    </div>
     <label>Orte / Listen</label>
     <div class="card" style="margin-top:4px">${locRows||"<div class='section-empty'>Keine Orte.</div>"}</div>
     <div class="mrow"><input id="s_newloc" placeholder="Neuer Ort…"><button class="btn small sec" id="s_addloc" style="width:auto">+</button></div>
@@ -1003,6 +1024,11 @@ function openSettings(){
     await sb.from("locations").insert({name:v, sort_order:S.locations.length});
     await loadAll(); openSettings();
   };
+  $$("#s_theme button").forEach(b=>b.onclick = ()=>{
+    localStorage.setItem("wopTheme", b.dataset.v);
+    $$("#s_theme button").forEach(x=>x.classList.toggle("active", x===b));
+    applyTheme();
+  });
   $("#s_logout").onclick = async ()=>{ await sb.auth.signOut(); };
   $("#s_archive").onclick = ()=>{ closeModal(); switchTab("archive"); };
   $("#s_savekey").onclick = ()=>{
