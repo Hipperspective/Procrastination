@@ -258,7 +258,7 @@ async function completeTask(t){
     const snapshot = {};
     Object.keys(upd).forEach(k=>snapshot[k]=t[k]);
     Object.assign(t, upd);
-    renderAll();
+    setTimeout(renderAll, 500); // Animation kurz zeigen, dann Liste aktualisieren
     const { error } = await sb.from("tasks").update(upd).eq("id", t.id);
     if (error){
       Object.assign(t, snapshot); renderAll();
@@ -457,7 +457,7 @@ function renderTasks(){
     const t = S.tasks.find(x=>x.id===row.dataset.id);
     $(".chk", row).onclick = (e)=>{ e.stopPropagation();
       if (isCompletedToday(t)) uncompleteToday(t);
-      else completeTask(t);
+      else { celebrate(e.currentTarget, xpForCompletion(t.duration_minutes, t.is_priority)); completeTask(t); }
     };
     const pb = $("[data-play]", row);
     if (pb) pb.onclick = (e)=>{ e.stopPropagation(); startFocusTask(t.id); };
@@ -1438,7 +1438,7 @@ async function renderHome(){
     if (chk) chk.onclick = (e)=>{ e.stopPropagation();
       if (!t) return;
       if (isCompletedToday(t)) uncompleteToday(t);
-      else completeTask(t);
+      else { celebrate(e.currentTarget, xpForCompletion(t.duration_minutes, t.is_priority)); completeTask(t); }
     };
     row.onclick = ()=>{ if(t) openTaskForm(t); };
   });
@@ -2166,7 +2166,8 @@ function wireTodoPanel(root){
   $$(".todorow", panel).forEach(r=>{
     const t = S.tasks.find(x=>x.id===r.dataset.id); if(!t) return;
     $(".chk", r).onclick = (e)=>{ e.stopPropagation();
-      isCompletedToday(t) ? uncompleteToday(t) : completeTask(t); };
+      if (isCompletedToday(t)) uncompleteToday(t);
+      else { celebrate(e.currentTarget, xpForCompletion(t.duration_minutes, t.is_priority)); completeTask(t); } };
     $(".tt", r).onclick = ()=>openTaskForm(t);
     const fb = $(".todofrog", r);
     if (fb) fb.onclick = async (e)=>{ e.stopPropagation(); await setTodayFrog(t.id); };
@@ -2195,9 +2196,35 @@ function xpLineHtml(){
   const li = levelInfo();
   return `<div class="xpline">
     <b>⭐ Level ${li.level}</b>
-    <div class="subprog"><div style="width:${li.pct}%"></div></div>
-    <span>${li.xp.toLocaleString("de-DE")} XP</span>
+    <div class="xpbar"><div style="width:${li.pct}%"></div></div>
+    <span><b>${li.xp.toLocaleString("de-DE")}</b> XP</span>
+    <div class="xpnext">Noch ${(li.nextReq-li.xp).toLocaleString("de-DE")} XP bis Level ${li.level+1} · ${Math.round(li.pct)} %</div>
   </div>`;
+}
+
+// ---------- Abhak-Feier: Pop, Ring, Partikel, +XP ----------
+function celebrate(btn, xp){
+  if (!btn || !btn.isConnected) return;
+  try { if (navigator.vibrate) navigator.vibrate(12); } catch(e){}
+  btn.classList.add("on","anim");
+  btn.style.position = btn.style.position || "relative";
+  const colors = ["#3ddc84","#ffd54f","#8b7bff","#43d3ce"];
+  for (let i=0;i<6;i++){
+    const p = document.createElement("span");
+    p.className = "chkparticle";
+    const ang = (i/6)*Math.PI*2 + Math.random()*0.6;
+    const dist = 16 + Math.random()*10;
+    p.style.setProperty("--px", Math.cos(ang)*dist+"px");
+    p.style.setProperty("--py", Math.sin(ang)*dist+"px");
+    p.style.background = colors[i%colors.length];
+    btn.appendChild(p);
+  }
+  if (xp){
+    const f = document.createElement("span");
+    f.className = "xpfloat";
+    f.textContent = "+"+xp+" XP";
+    btn.appendChild(f);
+  }
 }
 
 // ============================================================
@@ -2335,29 +2362,94 @@ function renderFocus(){
 }
 
 // ============================================================
-// 📒 Post-it am Heute-Screen (synct über alle Geräte)
+// 📒 Post-it am Heute-Screen: Zeilen-Notizen, abhakbar, → To-Do
 // ============================================================
-let _postitSaveTimer = null;
+function getNotes(){
+  let list = getSetting("homeNotesList", null);
+  if (!Array.isArray(list)){
+    // Migration: alter Freitext -> Zeilen
+    const oldText = getSetting("homeNotes", "");
+    list = String(oldText||"").split("\n").map(s=>s.trim()).filter(Boolean)
+      .map(text=>({ id: uid(), text, done:false }));
+  }
+  return list;
+}
+async function saveNotes(list){ await saveSetting("homeNotesList", list); }
+
 function postitHtml(){
-  const txt = getSetting("homeNotes", "");
+  const notes = getNotes();
+  const rows = notes.map(n=>`
+    <div class="noterow" data-note="${esc(n.id)}" style="display:flex;align-items:center;gap:9px;padding:6px 0;border-bottom:1px dashed rgba(255,213,79,.25)">
+      <button class="chk notechk ${n.done?"on":""}" style="width:21px;height:21px;min-width:21px;margin:0;font-size:11px" aria-label="Abhaken">✓</button>
+      <span style="flex:1;font-size:14.5px;line-height:1.4;${n.done?"text-decoration:line-through;color:var(--dim2);":""}">${esc(n.text)}</span>
+      <button class="iconbtn notemenu" style="padding:4px 8px;font-size:15px;color:var(--dim2)" aria-label="Optionen">⋯</button>
+    </div>
+    <div class="noteactions hidden" data-for="${esc(n.id)}" style="display:flex;gap:8px;padding:6px 0 8px 30px">
+      <button class="btn small sec note-todo">↑ Zur To-Do</button>
+      <button class="btn small sec note-del" style="color:var(--red)">🗑 Löschen</button>
+    </div>`).join("");
   return `<div class="card" id="postit" style="background:linear-gradient(180deg,rgba(255,213,79,.14),rgba(255,213,79,.05)),var(--card);border-color:rgba(255,213,79,.35)">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
       <b style="font-size:13.5px">📒 Notizzettel</b>
       <span id="postitState" style="font-size:11px;color:var(--dim2)"></span>
     </div>
-    <textarea id="postitText" rows="5" placeholder="Was dir gerade durch den Kopf geht…"
-      style="background:transparent;border:none;padding:2px;resize:vertical;font-size:14.5px;line-height:1.5">${esc(txt)}</textarea>
+    <input id="postitInput" placeholder="Notiz tippen, Enter = nächste Zeile…" autocomplete="off" enterkeyhint="next"
+      style="background:transparent;border:none;border-bottom:1px dashed rgba(255,213,79,.4);border-radius:0;padding:6px 2px;font-size:14.5px">
+    <div id="noteList">${rows || `<div class="section-empty" style="padding:8px 0 2px">Kopf leeren – einfach lostippen ✍️</div>`}</div>
   </div>`;
 }
 function wirePostit(root){
-  const ta = $("#postitText", root); if (!ta) return;
-  ta.addEventListener("input", ()=>{
-    $("#postitState").textContent = "…";
-    clearTimeout(_postitSaveTimer);
-    _postitSaveTimer = setTimeout(async ()=>{
-      await saveSetting("homeNotes", ta.value);
-      const st = $("#postitState"); if (st){ st.textContent = "✓ gespeichert"; setTimeout(()=>{ if(st.isConnected) st.textContent=""; }, 2000); }
-    }, 800);
+  const panel = $("#postit", root); if (!panel) return;
+  const input = $("#postitInput", panel);
+  const stateEl = $("#postitState", panel);
+  const flash = txt => { if(stateEl){ stateEl.textContent = txt; setTimeout(()=>{ if(stateEl.isConnected) stateEl.textContent=""; }, 1800); } };
+
+  input.addEventListener("keydown", async e=>{
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const v = input.value.trim();
+    if (!v){ input.blur(); flash("✓ fertig"); return; }   // Doppel-Enter = fertig
+    const list = getNotes();
+    list.push({ id: uid(), text: v, done:false });
+    input.value = "";
+    await saveNotes(list);
+    renderHome();
+    const ni = $("#postitInput"); if (ni) ni.focus();      // direkt nächste Zeile
+  });
+
+  $$(".noterow", panel).forEach(row=>{
+    const id = row.dataset.note;
+    $(".notechk", row).onclick = async (e)=>{
+      e.stopPropagation();
+      const list = getNotes();
+      const n = list.find(x=>x.id===id); if (!n) return;
+      n.done = !n.done;
+      if (n.done) celebrate(e.currentTarget, 0);
+      await saveNotes(list);
+      setTimeout(renderHome, n.done ? 450 : 0);
+    };
+    $(".notemenu", row).onclick = (e)=>{
+      e.stopPropagation();
+      const act = $(`.noteactions[data-for="${CSS.escape(id)}"]`, panel);
+      if (act) act.classList.toggle("hidden");
+    };
+  });
+  $$(".noteactions", panel).forEach(act=>{
+    const id = act.dataset.for;
+    $(".note-todo", act).onclick = async ()=>{
+      const list = getNotes();
+      const n = list.find(x=>x.id===id); if (!n) return;
+      const { error } = await sb.from("tasks").insert({ title: n.text, duration_minutes: 15,
+        location: todoLocationName(), kind: "oneOff" });
+      if (error) return toast("Fehler: "+error.message, true);
+      await saveNotes(list.filter(x=>x.id!==id));
+      toast("↑ In die To-Do-Liste verschoben");
+      loadAll();
+    };
+    $(".note-del", act).onclick = async ()=>{
+      await saveNotes(getNotes().filter(x=>x.id!==id));
+      renderHome();
+    };
   });
 }
 

@@ -303,9 +303,23 @@ details.moreopts[open] summary::before{content:'▾ ';}
 .playbtn{background:none;border:1.5px solid var(--line);color:var(--accent2);width:34px;height:34px;min-width:34px;
   border-radius:50%;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;margin-top:1px;}
 .frogcard{border:1.5px solid rgba(61,220,132,.4)!important;background:linear-gradient(135deg,rgba(61,220,132,.10),transparent 60%),var(--card)!important;}
-.xpline{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:12.5px;color:var(--dim);}
+.xpline{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:12.5px;color:var(--dim);flex-wrap:wrap;}
 .xpline b{color:var(--text);}
-.xpline .subprog{flex:1;margin:0;}
+.xpbar{flex:1;min-width:120px;height:9px;border-radius:5px;background:rgba(127,136,160,.25);
+  border:1px solid rgba(127,136,160,.35);overflow:hidden;}
+.xpbar>div{height:100%;background:var(--amber);border-radius:5px;box-shadow:0 0 8px rgba(255,180,84,.55);}
+.xpnext{width:100%;font-size:11px;color:var(--dim2);margin-top:-2px;}
+
+/* Abhak-Animation (Dopamin, aber dezent) */
+@keyframes chkpop{0%{transform:scale(1)}40%{transform:scale(1.35)}70%{transform:scale(.92)}100%{transform:scale(1)}}
+@keyframes chkring{0%{box-shadow:0 0 0 0 rgba(61,220,132,.55)}100%{box-shadow:0 0 0 16px rgba(61,220,132,0)}}
+@keyframes xpfloat{0%{opacity:0;transform:translateY(2px) scale(.8)}20%{opacity:1;transform:translateY(-4px) scale(1)}100%{opacity:0;transform:translateY(-26px) scale(1)}}
+@keyframes particle{0%{opacity:1;transform:translate(0,0) scale(1)}100%{opacity:0;transform:translate(var(--px),var(--py)) scale(.3)}}
+.chk.anim{animation:chkpop .45s cubic-bezier(.34,1.56,.64,1), chkring .55s ease-out;}
+.xpfloat{position:absolute;left:50%;top:-6px;transform:translateX(-50%);font-size:11.5px;font-weight:800;
+  color:var(--amber);pointer-events:none;white-space:nowrap;animation:xpfloat 1s ease-out forwards;z-index:20;}
+.chkparticle{position:absolute;left:50%;top:50%;width:5px;height:5px;border-radius:50%;pointer-events:none;
+  animation:particle .6s ease-out forwards;z-index:19;}
 
 /* Auth / setup */
 .center-screen{min-height:85vh;display:flex;flex-direction:column;justify-content:center;max-width:420px;margin:0 auto;padding:24px;}
