@@ -1290,9 +1290,12 @@ function homePlanItems(){
       items.push({ t, done, time: t.has_scheduled_time ? fmtTime(new Date(t.scheduled_date)) : null,
         sort: t.has_scheduled_time ? new Date(t.scheduled_date).getHours()*60+new Date(t.scheduled_date).getMinutes() : 1441 });
     } else if (!done && taskDueState(t).due){
-      items.push({ t, done:false, time:null, sort: 2000 - (t.is_priority?500:0) - overdueDays(t) });
+      items.push({ t, done:false, time:null, due:true, sort: 2000 - (t.is_priority?500:0) - overdueDays(t) });
     } else if (done){
       items.push({ t, done:true, time:null, sort: 5000 });
+    } else {
+      // offen, aber (noch) nicht fällig – trotzdem sichtbar, damit nichts verloren geht
+      items.push({ t, done:false, time:null, sort: 3000 - (t.is_priority?400:0) - overdueDays(t) });
     }
   });
   items.sort((a,b)=>a.sort-b.sort);
@@ -1303,10 +1306,18 @@ const homeCat = () => {
   const v = localStorage.getItem("wopHomeCat") || "";
   return S.locations.some(l=>l.name===v) ? v : "";
 };
-// "Als Nächstes" in Kategorie-Häppchen (max 3 pro Kategorie) statt einer Wand
+// Auf/zu-Zustand der Kategorie-Karten (pro Gerät gemerkt)
+function homeCatState(){
+  try { return JSON.parse(localStorage.getItem("wopHomeCatState")||"{}"); } catch(e){ return {}; }
+}
+function setHomeCatState(name, open){
+  const st = homeCatState(); st[name] = open ? "open" : "closed";
+  localStorage.setItem("wopHomeCatState", JSON.stringify(st));
+}
+// "Als Nächstes": aufklappbare Kategorie-Karten (Fleischmann, Hipper Machines, …)
 function homeGroupedPlan(openPlan, planRow){
   if (!openPlan.length) return "";
-  const PER_CAT = homeCat() ? 8 : 3;
+  const PER_CAT = homeCat() ? 10 : 4;
   const groups = [];
   S.locations.filter(l=>!l.is_routine).forEach((l,i)=>{
     const arr = openPlan.filter(p=>(p.t.location||"")===l.name);
@@ -1314,14 +1325,24 @@ function homeGroupedPlan(openPlan, planRow){
   });
   const rest = openPlan.filter(p=>!S.locations.some(l=>!l.is_routine && l.name===(p.t.location||"")));
   if (rest.length) groups.push({ name:"Sonstiges", color:"#7e88a0", arr:rest });
-  return groups.map(g=>`<div class="card" style="border-left:4px solid ${g.color}">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">
-      <b style="font-size:13px">${esc(g.name)}</b>
-      <span style="font-size:11.5px;color:var(--dim2);font-weight:700">${g.arr.length}</span>
-    </div>
-    ${g.arr.slice(0,PER_CAT).map(planRow).join("")}
-    ${g.arr.length>PER_CAT?`<div style="text-align:center;padding-top:6px"><a class="homeMoreCat" data-loc="${esc(g.name)}" style="color:var(--accent2);font-size:12px;font-weight:700;cursor:pointer">＋ ${g.arr.length-PER_CAT} weitere ›</a></div>`:""}
-  </div>`).join("");
+  const st = homeCatState();
+  return groups.map(g=>{
+    const hasUrgent = g.arr.some(p=>p.due || p.time);
+    const isOpen = homeCat() ? true : (st[g.name] ? st[g.name]==="open" : hasUrgent); // Standard: auf, wenn was fällig ist
+    const dueN = g.arr.filter(p=>p.due||p.time).length;
+    return `<div class="card" style="border-left:4px solid ${g.color};${isOpen?"":"padding:11px 14px;"}">
+      <div class="homecathead" data-cat="${esc(g.name)}" role="button" tabindex="0"
+        style="display:flex;align-items:center;gap:8px;cursor:pointer;${isOpen?"margin-bottom:2px;":""}">
+        <span style="color:var(--dim2);font-size:11px">${isOpen?"▾":"▸"}</span>
+        <b style="font-size:13px">${esc(g.name)}</b>
+        <span style="font-size:11.5px;color:var(--dim2);font-weight:700">${g.arr.length}</span>
+        ${dueN&&!isOpen?`<span style="font-size:10.5px;font-weight:800;color:var(--amber)">${dueN} fällig</span>`:""}
+        <span style="margin-left:auto"></span>
+      </div>
+      ${isOpen ? g.arr.slice(0,PER_CAT).map(planRow).join("")
+        + (g.arr.length>PER_CAT?`<div style="text-align:center;padding-top:6px"><a class="homeMoreCat" data-loc="${esc(g.name)}" style="color:var(--accent2);font-size:12px;font-weight:700;cursor:pointer">＋ ${g.arr.length-PER_CAT} weitere ›</a></div>`:"") : ""}
+    </div>`;
+  }).join("");
 }
 
 async function renderHome(){
@@ -1432,6 +1453,13 @@ async function renderHome(){
     const b=S.timeBlocks.find(x=>x.id===row.dataset.block); if(b) openBlockForm(b);
   });
   $("#homeWork").onclick = ()=>switchTab("work");
+  $$(".homecathead", el).forEach(h=>h.onclick = ()=>{
+    const name = h.dataset.cat;
+    const st = homeCatState();
+    const cur = st[name] ? st[name]==="open" : h.textContent.includes("▾");
+    setHomeCatState(name, !cur);
+    renderHome();
+  });
   const hcf = $("#homeCatFilter", el);
   if (hcf) hcf.onchange = ()=>{ localStorage.setItem("wopHomeCat", hcf.value); renderHome(); };
   $$(".homeMoreCat", el).forEach(a=>a.onclick = ()=>{
