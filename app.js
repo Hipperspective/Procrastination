@@ -568,7 +568,7 @@ function startApp(){
     setTimeout(()=>{ const c=$("#homeChat"); if(c){ c.scrollIntoView({behavior:"smooth",block:"center"}); const i=$("#chatIn"); if(i) i.focus(); } }, 150); };
   $("#btnSettings").onclick = openSettings;
   initRealtime();
-  loadAll().then(()=>{ if (getFocus()) showFocus(); });
+  loadAll().then(()=>{ if (getFocus()) showFocus(); migratePushKey(); });
   // Ticker für laufende Stempeluhr & Cooldowns
   S.tickTimer = setInterval(()=>{ if(S.tab==="work") renderWork(); if(S.tab==="home") renderHome(); }, 30000);
   setInterval(()=>{
@@ -2334,7 +2334,7 @@ function openRoutine(name){
 // ============================================================
 // 🔔 Push-Benachrichtigungen (Web Push)
 // ============================================================
-const VAPID_PUBLIC_KEY = "BHWmrGuXg9qtBkjJiNrtvx03b70TiZwDlAJIyCItZH8rBfOJAJA7M64stnC3wxe-kHOHrCpRUcdqWw4qadE-rdY";
+const VAPID_PUBLIC_KEY = "BLdwfKKcOwvbxe72eJdsXwe8XgFmH4dWnH1BNYeKnvTBsOGmxGkXk6rNfLjK84Wu9ffQHEdNNwscNN9uOJiSr4M";
 
 function b64ToU8(base64){
   const pad = "=".repeat((4 - base64.length % 4) % 4);
@@ -2342,6 +2342,28 @@ function b64ToU8(base64){
   const raw = atob(b); const arr = new Uint8Array(raw.length);
   for (let i=0;i<raw.length;i++) arr[i]=raw.charCodeAt(i);
   return arr;
+}
+
+// Hat sich der VAPID-Key geändert? Dann das Geräte-Abo automatisch erneuern.
+let _pushMigrated = false;
+async function migratePushKey(){
+  if (_pushMigrated) return; _pushMigrated = true;
+  try {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = reg && await reg.pushManager.getSubscription();
+    if (!sub || !sub.options || !sub.options.applicationServerKey) return;
+    const cur = new Uint8Array(sub.options.applicationServerKey);
+    const want = b64ToU8(VAPID_PUBLIC_KEY);
+    if (cur.length === want.length && cur.every((v,i)=>v===want[i])) return; // alles aktuell
+    await sb.from("push_subscriptions").delete().eq("endpoint", sub.endpoint);
+    await sub.unsubscribe();
+    const s2 = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey: want });
+    const j = s2.toJSON();
+    await sb.from("push_subscriptions").upsert({ endpoint:s2.endpoint, p256dh:j.keys.p256dh, auth:j.keys.auth,
+      device: navigator.userAgent.slice(0,120) }, { onConflict:"endpoint" });
+    toast("🔔 Push-Abo erneuert (neuer Schlüssel)");
+  } catch(e){ console.warn("Push-Key-Migration fehlgeschlagen:", e); }
 }
 
 async function pushStatus(){

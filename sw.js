@@ -1,5 +1,5 @@
 // Minimaler Service Worker: cached die App-Shell, Daten kommen immer live von Supabase.
-const CACHE = "wop-shell-v32";
+const CACHE = "wop-shell-v33";
 const SHELL = ["./", "index.html", "app.js", "manifest.json", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", e => {
