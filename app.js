@@ -2404,7 +2404,7 @@ async function sendTestPush(btn){
     else if (r.ok && d && d.devices === 0)
       toast("Kein Gerät angemeldet – Push oben zuerst aktivieren.", true);
     else if (r.ok && d)
-      toast(`0 zugestellt, ${d.failed} fehlgeschlagen – VAPID-Key/Abos prüfen.`, true);
+      toast(`0 zugestellt, ${d.failed} fehlgeschlagen${d.lastError?": "+d.lastError:" – VAPID-Key/Abos prüfen."}`, true);
     else if (r.status === 404)
       toast("Edge Function antwortet nicht – neu deployen (edge-function-push.ts)!", true);
     else
