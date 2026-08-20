@@ -286,6 +286,10 @@ details.moreopts[open] summary::before{content:'▾ ';}
 .locsec{cursor:pointer;user-select:none;}
 .locsec .arr{color:var(--dim2);font-size:12px;margin-left:auto;}
 
+/* Mikro-Aufnahme: pulsierender Ring */
+@keyframes micpulse{0%,100%{box-shadow:0 0 0 0 rgba(255,93,108,.55);}50%{box-shadow:0 0 0 9px rgba(255,93,108,0);}}
+.miclive{animation:micpulse 1.2s ease-out infinite;}
+
 /* Jahres-Heatmap (Statistik) */
 .heatwrap{overflow-x:auto;padding-bottom:2px;}
 .heatmonths{display:grid;grid-auto-flow:column;grid-template-columns:repeat(52,15px);gap:0;width:max-content;

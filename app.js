@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 35; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 36; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -3000,37 +3000,58 @@ function wirePostit(root){
 let _voiceRec = null, _mediaRec = null, _voiceChunks = [];
 function voiceBtnState(active){
   const b = $("#chatMic"); if (!b) return;
-  b.textContent = active ? "⏺" : "🎤";
+  b.textContent = active ? "⏹" : "🎤";
   b.style.background = active ? "var(--red)" : "var(--card2)";
   b.style.color = active ? "#fff" : "var(--text)";
+  b.classList.toggle("miclive", !!active);
+  const inp = $("#chatIn");
+  if (inp){
+    if (active){ if(!inp.dataset.ph) inp.dataset.ph = inp.placeholder;
+      inp.placeholder = "🔴 Ich höre zu … ⏹ tippen = fertig & senden"; }
+    else if (inp.dataset.ph) inp.placeholder = inp.dataset.ph;
+  }
 }
 function toggleVoice(){
-  if (_voiceRec || _mediaRec) return stopVoice();
+  if (_voiceRec || _mediaRec) return stopVoice(); // 2. Tipp = Stopp → sendet automatisch
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (SR){
     _voiceRec = new SR();
     _voiceRec.lang = "de-DE";
-    _voiceRec.interimResults = false;
+    _voiceRec.interimResults = true; // live mittippen, damit man sieht, dass es läuft
+    let finalText = "";
     _voiceRec.onresult = e=>{
-      const text = e.results[0][0].transcript;
-      _voiceRec = null; voiceBtnState(false);
-      const inp = $("#chatIn"); if (inp){ inp.value = text; sendChat(); }
+      let interim = "";
+      for (let i=e.resultIndex; i<e.results.length; i++){
+        if (e.results[i].isFinal) finalText += e.results[i][0].transcript + " ";
+        else interim += e.results[i][0].transcript;
+      }
+      const inp = $("#chatIn"); if (inp) inp.value = (finalText + interim).trim();
     };
     _voiceRec.onerror = e=>{
+      const wasDenied = e.error==="not-allowed";
       _voiceRec = null; voiceBtnState(false);
-      if (e.error==="not-allowed") toast("Mikrofon nicht erlaubt.", true);
+      if (wasDenied) toast("Mikrofon nicht erlaubt.", true);
+      else if (e.error==="no-speech") toast("Nichts gehört – tipp 🎤 und sprich einfach los.");
       else whisperRecord(); // Fallback über OpenAI
     };
-    _voiceRec.onend = ()=>{ if (_voiceRec){ _voiceRec = null; voiceBtnState(false); } };
-    try { _voiceRec.start(); voiceBtnState(true); toast("🎤 Sprich – ich höre zu…"); }
+    _voiceRec.onend = ()=>{
+      // Ende = Stopp-Tipp ODER kurze Sprechpause → automatisch senden
+      _voiceRec = null; voiceBtnState(false);
+      const inp = $("#chatIn");
+      if (inp && inp.value.trim()) sendChat();
+    };
+    try { _voiceRec.start(); voiceBtnState(true); }
     catch(e){ _voiceRec = null; whisperRecord(); }
   } else {
     whisperRecord();
   }
 }
 function stopVoice(){
-  if (_voiceRec){ try{ _voiceRec.stop(); }catch(e){} _voiceRec=null; voiceBtnState(false); }
-  if (_mediaRec && _mediaRec.state!=="inactive") _mediaRec.stop(); // onstop transkribiert
+  if (_voiceRec){
+    try{ _voiceRec.stop(); } // onend sendet dann automatisch
+    catch(e){ _voiceRec=null; voiceBtnState(false); }
+  }
+  if (_mediaRec && _mediaRec.state!=="inactive") _mediaRec.stop(); // onstop transkribiert & sendet
 }
 async function whisperRecord(){
   const key = localStorage.getItem("wopAiKey");
@@ -3062,7 +3083,7 @@ async function whisperRecord(){
     };
     _mediaRec.start();
     voiceBtnState(true);
-    toast("⏺ Aufnahme läuft – zum Stoppen nochmal tippen");
+    toast("🔴 Aufnahme läuft – ⏹ tippen, wenn du fertig bist. Gesendet wird automatisch.");
   } catch(e){ toast("Mikrofon nicht verfügbar: "+(e.message||e), true); }
 }
 
