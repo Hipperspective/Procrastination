@@ -131,6 +131,9 @@ async function loadAll(){
   S.timeBlocks = tb.error ? [] : tb.data;  // Tabelle fehlt evtl. noch (SQL-Update)
   if (tb.error && !S._tbWarned){ S._tbWarned=true; toast("Kalender: bitte update-kalender.sql in Supabase ausführen", true); }
   S.settings = Object.fromEntries(st.data.map(r=>[r.key, r.value]));
+  // Wetter-Ort einmalig in die Settings spiegeln (fürs Morgen-Briefing der Edge Function)
+  try { const g = JSON.parse(localStorage.getItem("wopGeo")||"null");
+    if (g && g.lat && !S.settings.geo) saveSetting("geo", g); } catch(e){}
 
   if (S.locations.length===0){
     const rows = DEFAULT_LOCATIONS.map((name,i)=>({name, sort_order:i, is_work_location:name==="Work"}));
@@ -1378,7 +1381,9 @@ async function fetchWeather(){
 function askGeo(){
   if (!navigator.geolocation) return openCityPicker();
   navigator.geolocation.getCurrentPosition(p=>{
-    localStorage.setItem("wopGeo", JSON.stringify({lat:+p.coords.latitude.toFixed(3), lon:+p.coords.longitude.toFixed(3), name:"Mein Standort"}));
+    const g = {lat:+p.coords.latitude.toFixed(3), lon:+p.coords.longitude.toFixed(3), name:"Mein Standort"};
+    localStorage.setItem("wopGeo", JSON.stringify(g));
+    saveSetting("geo", g); // für das Morgen-Briefing (Edge Function)
     weatherCache=null; renderHome();
   }, ()=>{ toast("Standort nicht verfügbar – gib stattdessen deinen Ort ein."); openCityPicker(); }, {timeout:8000});
 }
@@ -1406,7 +1411,9 @@ function openCityPicker(){
          <div class="n">${esc([c.admin1,c.country].filter(Boolean).join(", "))}</div></div><div>›</div></div>`).join("");
       $$("#cp_results .wt-entry").forEach(row=>row.onclick = ()=>{
         const c = res[+row.dataset.i];
-        localStorage.setItem("wopGeo", JSON.stringify({lat:+c.latitude.toFixed(3), lon:+c.longitude.toFixed(3), name:c.name}));
+        const g = {lat:+c.latitude.toFixed(3), lon:+c.longitude.toFixed(3), name:c.name};
+        localStorage.setItem("wopGeo", JSON.stringify(g));
+        saveSetting("geo", g); // für das Morgen-Briefing (Edge Function)
         weatherCache=null; closeModal(); renderHome();
       });
     } catch(e){ $("#cp_results").innerHTML = `<div class="section-empty">Suche fehlgeschlagen – Internet?</div>`; }
@@ -2391,6 +2398,8 @@ async function renderNotifySettings(){
   const lead = getSetting("notifyBlockLead", 30);
   const weeklyOn = getSetting("notifyWeeklyEnabled", true);
   const weeklyMin = getSetting("notifyWeeklyMin", 1080);
+  const briefOn = getSetting("notifyBriefEnabled", true);
+  const briefMin = getSetting("notifyBriefMin", 420);
   const hmv = m => `${pad(Math.floor(m/60))}:${pad(m%60)}`;
   const routines = S.locations.filter(l=>l.is_routine);
 
@@ -2407,6 +2416,11 @@ async function renderNotifySettings(){
       <button class="toggle ${alarmsOn?"on":""}" id="n_alarms"></button></div>
     <div class="mrow" ${alarmsOn?"":'style="display:none"'} id="n_leadrow">
       <div><label>Vorlauf (Minuten)</label><input type="number" min="0" id="n_lead" value="${lead}"></div><div></div>
+    </div>
+    <div class="switch"><label>🌅 Morgen-Briefing (Wetter, Termine, Frosch)</label>
+      <button class="toggle ${briefOn?"on":""}" id="n_brief"></button></div>
+    <div class="mrow" ${briefOn?"":'style="display:none"'} id="n_briefrow">
+      <div><label>Uhrzeit</label><input type="time" id="n_brieftime" value="${hmv(briefMin)}"></div><div></div>
     </div>
     <div class="switch"><label>🌙 Sonntags-Review (Wochenrückblick)</label>
       <button class="toggle ${weeklyOn?"on":""}" id="n_weekly"></button></div>
@@ -2432,6 +2446,9 @@ async function renderNotifySettings(){
   const dt = $("#n_digesttime");
   if (dt) dt.onchange = ()=>saveSetting("notifyDigestMin", hmToMin(dt.value));
   $("#n_alarms").onclick = async ()=>{ await saveSetting("notifyBlockAlarms", !alarmsOn); renderNotifySettings(); };
+  $("#n_brief").onclick = async ()=>{ await saveSetting("notifyBriefEnabled", !briefOn); renderNotifySettings(); };
+  const btI = $("#n_brieftime");
+  if (btI) btI.onchange = ()=>saveSetting("notifyBriefMin", hmToMin(btI.value));
   $("#n_weekly").onclick = async ()=>{ await saveSetting("notifyWeeklyEnabled", !weeklyOn); renderNotifySettings(); };
   const wtI = $("#n_weeklytime");
   if (wtI) wtI.onchange = ()=>saveSetting("notifyWeeklyMin", hmToMin(wtI.value));
