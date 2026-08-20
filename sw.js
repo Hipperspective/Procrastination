@@ -1,5 +1,5 @@
 // Minimaler Service Worker: cached die App-Shell, Daten kommen immer live von Supabase.
-const CACHE = "wop-shell-v28";
+const CACHE = "wop-shell-v29";
 const SHELL = ["./", "index.html", "app.js", "manifest.json", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", e => {
@@ -44,6 +44,12 @@ self.addEventListener("notificationclick", e => {
   // "✓ Erledigt"-Button: Aufgabe direkt abhaken, ohne die App zu öffnen
   if (e.action === "done" && e.notification.data && e.notification.data.completeUrl) {
     e.waitUntil(fetch(e.notification.data.completeUrl, { method: "POST" }).catch(() => {}));
+    return;
+  }
+  // Snooze-Buttons: Aufgabe +1 Std bzw. auf morgen verschieben
+  if ((e.action === "snooze60" || e.action === "snoozeTomorrow") && e.notification.data && e.notification.data.snoozeUrl) {
+    const mode = e.action === "snooze60" ? "hour" : "tomorrow";
+    e.waitUntil(fetch(e.notification.data.snoozeUrl + "&mode=" + mode, { method: "POST" }).catch(() => {}));
     return;
   }
   e.waitUntil(clients.matchAll({ type: "window", includeUncontrolled: true }).then(list => {

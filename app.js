@@ -1057,6 +1057,42 @@ function renderStats(){
   S.completions.filter(c=>new Date(c.completed_at)>cutoff).forEach(c=>{ freq[c.title]=(freq[c.title]||0)+1; });
   const top = Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,8);
 
+  // Jahres-Heatmap: letzte 52 Wochen, Spalten = Wochen (Mo–So), scrollt zum Ende
+  const thisMon = startOfDay(new Date());
+  thisMon.setDate(thisMon.getDate() - ((thisMon.getDay()+6)%7));
+  const todayK = dayKey(new Date());
+  let heatCells = "";
+  const monthMarks = [];
+  for (let w=51; w>=0; w--){
+    const mon = new Date(thisMon); mon.setDate(mon.getDate()-w*7);
+    if (mon.getDate() <= 7) monthMarks.push({ col:51-w, label: mon.toLocaleDateString("de-DE",{month:"short"}) });
+    for (let i=0;i<7;i++){
+      const dd = new Date(mon); dd.setDate(dd.getDate()+i);
+      const k = dayKey(dd);
+      if (k > todayK){ heatCells += `<span class="hcell future"></span>`; continue; }
+      const n = (byDay[k]||{n:0}).n;
+      const lvl = n===0?0 : n<=2?1 : n<=4?2 : n<=7?3 : 4;
+      heatCells += `<span class="hcell l${lvl}" title="${k}: ${n}"></span>`;
+    }
+  }
+  const heatHtml = `<h2>Jahres-Heatmap</h2>
+    <div class="card"><div class="heatwrap" id="heatwrap">
+      <div class="heatmonths">${monthMarks.map(m=>`<span style="grid-column:${m.col+1}">${m.label}</span>`).join("")}</div>
+      <div class="heatmap">${heatCells}</div></div>
+    <div style="display:flex;justify-content:flex-end;align-items:center;gap:4px;font-size:10.5px;color:var(--dim2);margin-top:6px">
+      weniger <span class="hcell l0"></span><span class="hcell l1"></span><span class="hcell l2"></span><span class="hcell l3"></span><span class="hcell l4"></span> mehr</div></div>`;
+
+  // Achievements
+  const badges = achievementsList(byDay, streak);
+  const gotN = badges.filter(b=>b.got).length;
+  const badgeHtml = `<h2>Achievements · ${gotN}/${badges.length}</h2>
+    <div class="badgegrid">${badges.map(b=>`
+      <div class="badge ${b.got?"":"locked"}">
+        <div class="bi">${b.ico}</div>
+        <div class="bn">${b.name}</div>
+        <div class="bd">${b.got ? b.desc : b.prog}</div>
+      </div>`).join("")}</div>`;
+
   el.innerHTML = `
     <div class="statgrid">
       <div class="stat"><div class="v">🔥 ${streak}</div><div class="l">Tage-Streak</div></div>
@@ -1069,6 +1105,8 @@ function renderStats(){
       `<div class="bar ${sameDay(b.d,new Date())?"today":""}">
         ${b.v?`<em>${b.v}</em>`:""}<i style="height:${Math.max(2,90*b.v/max)}%"></i><b>${b.d.getDate()}.</b></div>`).join("")}
     </div></div>
+    ${heatHtml}
+    ${badgeHtml}
     <h2>Top-Aufgaben · 30 Tage</h2>
     <div class="card">${ top.length ? top.map(([n,v])=>
       `<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line);font-size:14.5px">
@@ -1076,6 +1114,46 @@ function renderStats(){
       : `<div class="section-empty">Noch keine Daten – leg los! 💪</div>`}</div>
     <div class="card" style="text-align:center;color:var(--dim);font-size:13px">Insgesamt ${totalN} Erledigungen aufgezeichnet</div>
   `;
+  const hw = $("#heatwrap", el); if (hw) hw.scrollLeft = hw.scrollWidth; // zum aktuellen Ende scrollen
+}
+
+// Achievements – alles aus vorhandenen Daten ableitbar, kein extra Speichern nötig
+function achievementsList(byDay, curStreak){
+  const total = S.completions.length;
+  const li = levelInfo();
+  // Bester Streak aller Zeiten
+  const days = Object.keys(byDay).sort();
+  let best=0, run=0, prev=null;
+  days.forEach(k=>{
+    run = (prev && (new Date(k+"T00:00:00Z") - new Date(prev+"T00:00:00Z")) === 86400000) ? run+1 : 1;
+    best = Math.max(best, run); prev = k;
+  });
+  best = Math.max(best, curStreak);
+  const maxDay = days.length ? Math.max(...days.map(k=>byDay[k].n)) : 0;
+  const early = S.completions.some(c=>new Date(c.completed_at).getHours() < 7);
+  const night = S.completions.some(c=>new Date(c.completed_at).getHours() >= 23);
+  const workH = Math.floor(S.workEntries.filter(w=>w.end_time).reduce((a,w)=>a+workedMinutes(w),0)/60);
+  const hasAbs = getAbsences().length > 0;
+  const A = (ico,name,desc,got,prog) => ({ico,name,desc,got,prog});
+  const cnt = (v,goal,unit)=>`${Math.min(v,goal)}/${goal}${unit||""}`;
+  return [
+    A("🌱","Erster Schritt","1 Aufgabe erledigt", total>=1, cnt(total,1)),
+    A("✅","Zehnerpack","10 Aufgaben erledigt", total>=10, cnt(total,10)),
+    A("💪","Halbes Hundert","50 Aufgaben erledigt", total>=50, cnt(total,50)),
+    A("🏆","Century","100 Aufgaben erledigt", total>=100, cnt(total,100)),
+    A("🚀","Maschine","500 Aufgaben erledigt", total>=500, cnt(total,500)),
+    A("🔥","Dranbleiber","3-Tage-Streak", best>=3, cnt(best,3)),
+    A("⚡","Wochenheld","7-Tage-Streak", best>=7, cnt(best,7)),
+    A("🌟","Zwei Wochen stark","14-Tage-Streak", best>=14, cnt(best,14)),
+    A("👑","Unaufhaltbar","30-Tage-Streak", best>=30, cnt(best,30)),
+    A("⭐","Aufsteiger","Level 5 erreicht", li.level>=5, `Level ${Math.min(li.level,5)}/5`),
+    A("🌠","Level-Legende","Level 10 erreicht", li.level>=10, `Level ${Math.min(li.level,10)}/10`),
+    A("🐝","Fleißige Biene","10 Aufgaben an einem Tag", maxDay>=10, cnt(maxDay,10)),
+    A("🌅","Frühaufsteher","Vor 7 Uhr erledigt", early, "vor 07:00"),
+    A("🦉","Nachteule","Nach 23 Uhr erledigt", night, "nach 23:00"),
+    A("⏱","Zeitmeister","100 h Arbeit erfasst", workH>=100, cnt(workH,100," h")),
+    A("🏖","Work-Life-Balance","Urlaub eingetragen", hasAbs, "Urlaub nutzen!"),
+  ];
 }
 
 // ============================================================
@@ -1880,6 +1958,24 @@ const AI_TOOLS = [
       title:{type:"string"}, date:{type:"string",description:"YYYY-MM-DD"} }, required:["title","date"] } } },
 ];
 
+// Kompakte Arbeitszeit-Zusammenfassung für den Assistenten
+function workStatsSummary(){
+  const mode = getSetting("workTargetMode","month");
+  const target = mode==="week" ? getSetting("weeklyTargetMinutes",2310) : getSetting("monthlyTargetMinutes",4800);
+  const curKey = periodKeyOf(new Date(), mode);
+  const absAll = getAbsences();
+  const workedThis = S.workEntries.filter(w=>periodKeyOf(w.start_time,mode)===curKey).reduce((a,w)=>a+workedMinutes(w),0);
+  const absThis = absAll.filter(a=>periodKeyOf(a.date+"T12:00:00",mode)===curKey).reduce((a,x)=>a+(x.min||0),0);
+  const byPeriod = {};
+  S.workEntries.filter(w=>w.end_time).forEach(w=>{ const k=periodKeyOf(w.start_time,mode); if(k!==curKey) byPeriod[k]=(byPeriod[k]||0)+workedMinutes(w); });
+  absAll.forEach(a=>{ const k=periodKeyOf(a.date+"T12:00:00",mode); if(k!==curKey) byPeriod[k]=(byPeriod[k]||0)+(a.min||0); });
+  const balance = Object.values(byPeriod).reduce((a,v)=>a+(v-target),0);
+  const todayMin = S.workEntries.filter(w=>isToday(w.start_time)).reduce((a,w)=>a+workedMinutes(w),0);
+  const wkKey = periodKeyOf(new Date(),"week");
+  const weekMin = S.workEntries.filter(w=>periodKeyOf(w.start_time,"week")===wkKey).reduce((a,w)=>a+workedMinutes(w),0);
+  return { mode, target, workedThis, absThis, balance, todayMin, weekMin };
+}
+
 function aiContext(){
   const today = new Date();
   const dk = dayKey(today);
@@ -1888,9 +1984,27 @@ function aiContext(){
   const week = [];
   for (let i=0;i<7;i++){ const d=new Date(); d.setDate(d.getDate()+i); const k=dayKey(d);
     const bl=blocksFor(k); if(bl.length) week.push(`${k} (${WEEKDAYS_DE[d.getDay()]}): `+bl.map(b=>`${minToHM(b.start_min)}-${minToHM(b.end_min)} ${b.title||b.type}`).join("; ")); }
-  return `Du bist der Assistent der deutschsprachigen To-Do-App "Procrastination Lists" von Finn.
+
+  // Live-Daten für Auskünfte
+  const ws = workStatsSummary();
+  const runE = runningEntry();
+  const doneToday = S.completions.filter(c=>isToday(c.completed_at));
+  const byDayC = {}; S.completions.forEach(c=>{ byDayC[dayKey(new Date(c.completed_at))]=1; });
+  let stk=0; const sdd=new Date(); if(!byDayC[dayKey(sdd)]) sdd.setDate(sdd.getDate()-1);
+  while(byDayC[dayKey(sdd)]){ stk++; sdd.setDate(sdd.getDate()-1); }
+  const li = levelInfo();
+  const upAbs = getAbsences().filter(a=>a.date>=dk).sort((a,b)=>a.date<b.date?-1:1).slice(0,14);
+  const dataBlock = `LIVE-DATEN (für Auskünfte – nutze diese Zahlen, rate nie):
+- Arbeitszeit heute: ${fmtMin(ws.todayMin)}${runE?` (läuft gerade seit ${fmtTime(new Date(runE.start_time))})`:""} · diese Woche: ${fmtMin(ws.weekMin)}
+- ${ws.mode==="week"?"Wochen":"Monats"}-Soll: ${fmtMin(ws.target)} · aktuelle Periode: ${fmtMin(ws.workedThis+ws.absThis)}${ws.absThis?` (davon Urlaub/Abwesenheit ${fmtMin(ws.absThis)})`:""} · Überstunden-Saldo: ${ws.balance>=0?"+":""}${fmtMin(ws.balance)}
+- Heute erledigt: ${doneToday.length} Aufgabe(n) (${fmtMin(doneToday.reduce((a,c)=>a+(c.minutes||0),0))})${doneToday.length?": "+doneToday.slice(0,8).map(c=>c.title).join(", "):""}
+- Streak: ${stk} Tag(e) · Level ${li.level} · ${li.xp.toLocaleString("de-DE")} XP
+- Kommende Abwesenheiten: ${upAbs.length?upAbs.map(a=>`${a.date} (${a.kind})`).join(", "):"keine"}`;
+
+  return `Du bist der persönliche Assistent der deutschsprachigen To-Do-App "Procrastination Lists" von Finn.
 Heute ist ${today.toLocaleDateString("de-DE",{weekday:"long",day:"2-digit",month:"2-digit",year:"numeric"})} (${dk}), Uhrzeit ${fmtTime(today)}.
 Du kannst per Tools Aufgaben, Termine (Zeitblöcke) und Arbeitszeiten anlegen, Aufgaben abhaken und Termine löschen.
+Du bist außerdem AUSKUNFT: Fragen wie "Was steht morgen an?", "Wie viel hab ich diese Woche gearbeitet?", "Wie ist mein Saldo?", "Was hab ich heute geschafft?" beantwortest du direkt und konkret mit den Zahlen aus LIVE-DATEN, den offenen Aufgaben und dem Kalender unten – ohne Tool-Aufruf. Sei dabei ein echter Assistent: Fasse zusammen, denk mit (z.B. "dein Tag ist eng, die 3 Aufgaben passen zwischen 14 und 16 Uhr") und schlag proaktiv Nächstes vor, wenn es hilft.
 Relative Datumsangaben ("morgen", "Freitag") immer in konkrete Daten umrechnen. Bei fehlender Endzeit eines Termins nimm 1 Stunde.
 ERINNERUNGEN ("erinnere mich am X um Y an Z"): create_task mit scheduled_date + scheduled_time und is_priority=true. Die App blendet sie automatisch erst ab dem Vortag ein und schickt zur Uhrzeit eine Push-Nachricht.
 KORREKTUREN: Wenn sich eine Nachricht auf einen gerade angelegten/besprochenen Eintrag bezieht ("bis 23 Uhr", "doch ohne Uhrzeit", "verschieb auf Montag"), IMMER update_appointment/update_task verwenden – NIE einen zweiten Eintrag anlegen.
@@ -2275,6 +2389,8 @@ async function renderNotifySettings(){
   const digestMin = getSetting("notifyDigestMin", 480);
   const alarmsOn = getSetting("notifyBlockAlarms", true);
   const lead = getSetting("notifyBlockLead", 30);
+  const weeklyOn = getSetting("notifyWeeklyEnabled", true);
+  const weeklyMin = getSetting("notifyWeeklyMin", 1080);
   const hmv = m => `${pad(Math.floor(m/60))}:${pad(m%60)}`;
   const routines = S.locations.filter(l=>l.is_routine);
 
@@ -2291,6 +2407,11 @@ async function renderNotifySettings(){
       <button class="toggle ${alarmsOn?"on":""}" id="n_alarms"></button></div>
     <div class="mrow" ${alarmsOn?"":'style="display:none"'} id="n_leadrow">
       <div><label>Vorlauf (Minuten)</label><input type="number" min="0" id="n_lead" value="${lead}"></div><div></div>
+    </div>
+    <div class="switch"><label>🌙 Sonntags-Review (Wochenrückblick)</label>
+      <button class="toggle ${weeklyOn?"on":""}" id="n_weekly"></button></div>
+    <div class="mrow" ${weeklyOn?"":'style="display:none"'} id="n_weeklyrow">
+      <div><label>Uhrzeit (Sonntag)</label><input type="time" id="n_weeklytime" value="${hmv(weeklyMin)}"></div><div></div>
     </div>
     ${ routines.length ? `<label style="margin-top:14px">Routine-Erinnerungen</label>` + routines.map(l=>`
       <div class="switch" data-loc="${l.id}">
@@ -2311,6 +2432,9 @@ async function renderNotifySettings(){
   const dt = $("#n_digesttime");
   if (dt) dt.onchange = ()=>saveSetting("notifyDigestMin", hmToMin(dt.value));
   $("#n_alarms").onclick = async ()=>{ await saveSetting("notifyBlockAlarms", !alarmsOn); renderNotifySettings(); };
+  $("#n_weekly").onclick = async ()=>{ await saveSetting("notifyWeeklyEnabled", !weeklyOn); renderNotifySettings(); };
+  const wtI = $("#n_weeklytime");
+  if (wtI) wtI.onchange = ()=>saveSetting("notifyWeeklyMin", hmToMin(wtI.value));
   const ld = $("#n_lead");
   if (ld) ld.onchange = ()=>saveSetting("notifyBlockLead", Math.max(0,+ld.value||30));
   $$(".n_rtoggle").forEach(b=>b.onclick = async ()=>{
@@ -2574,7 +2698,7 @@ function startFocusTask(taskId, opts={}){
   const t = S.tasks.find(x=>x.id===taskId);
   if (!t) return;
   _focusDomKey = null;
-  setFocusState({ taskId, start: Date.now(), five: !!opts.five,
+  setFocusState({ taskId, start: Date.now(), startedAt: Date.now(), five: !!opts.five,
     queue: opts.queue||[], label: opts.label||"", askedFive:false });
   showFocus();
 }
@@ -2602,14 +2726,18 @@ function renderFocus(){
   if (!t){ stopFocus(); return; }
   const elapsed = Math.floor((Date.now()-f.start)/1000);
   const mm = Math.floor(elapsed/60), ss = elapsed%60;
-  const targetMin = f.five ? 5 : Math.max(1, t.duration_minutes);
+  const onBreak = f.pomo && f.phase==="break";
+  const targetMin = f.pomo ? (onBreak ? 5 : 25) : (f.five ? 5 : Math.max(1, t.duration_minutes));
   const pct = Math.min(100, 100*elapsed/(targetMin*60));
   const over = elapsed > targetMin*60;
-  const fiveChoice = f.five && over && !f.askedFive;
+  const fiveChoice = !f.pomo && f.five && over && !f.askedFive;
+  const pomoWorkDone = f.pomo && !onBreak && over && !f.askedPomo;
+  const pomoBreakDone = f.pomo && onBreak && over;
 
   // Nur bei Zustandswechsel den DOM neu bauen – sonst nur Timer/Balken updaten.
   // (Voll-Rerender jede Sekunde würde Taps verschlucken, die genau dann passieren.)
-  const domKey = [f.taskId, f.five, fiveChoice, f.queue.length, over, (!f.five && elapsed<60)].join("|");
+  const domKey = [f.taskId, f.five, fiveChoice, f.queue.length, over, (!f.five && elapsed<60),
+    !!f.pomo, f.phase||"", f.round||0, pomoWorkDone, pomoBreakDone].join("|");
   if (domKey === _focusDomKey){
     const tm = $(".focus-timer", el); if (tm) tm.textContent = `${pad(mm)}:${pad(ss)}`;
     const sub = $(".focus-sub", el);
@@ -2619,28 +2747,49 @@ function renderFocus(){
   }
   _focusDomKey = domKey;
 
+  if (pomoWorkDone || pomoBreakDone){ try { if (navigator.vibrate) navigator.vibrate([80,60,80]); } catch(e){} }
+
+  const kicker = f.pomo ? `🍅 Pomodoro · Runde ${f.round||1}${onBreak?" · ☕️ Pause":""}`
+    : f.label ? `${esc(f.label)} · noch ${f.queue.length+1} Schritt${f.queue.length?"e":""}`
+    : (f.five?"Nur 5 Minuten":"Fokus");
   el.innerHTML = `
-    ${f.label?`<div class="focus-kicker">${esc(f.label)} · noch ${f.queue.length+1} Schritt${f.queue.length?"e":""}</div>`:`<div class="focus-kicker">${f.five?"Nur 5 Minuten":"Fokus"}</div>`}
-    <div class="focus-title">${esc(t.title)}</div>
+    <div class="focus-kicker">${kicker}</div>
+    <div class="focus-title">${onBreak ? "☕️ Kurze Pause" : esc(t.title)}</div>
     <div class="focus-timer">${pad(mm)}:${pad(ss)}</div>
     <div class="focus-sub">${over?`+${fmtMin(Math.ceil(elapsed/60 - targetMin))} über Plan (${fmtMin(targetMin)})`:`Ziel: ${fmtMin(targetMin)}`}</div>
     <div class="focus-bar"><div style="width:${pct}%"></div></div>
-    ${fiveChoice ? `<div class="focus-choice">
+    ${pomoWorkDone ? `<div class="focus-choice">
+      <b>🍅 Runde ${f.round||1} geschafft!</b>
+      <div style="font-size:13px;color:var(--dim);margin:6px 0 12px">25 Minuten voll – gönn dir 5 Minuten Pause.</div>
+      <button class="btn" id="fc_break">☕️ 5 Min Pause</button>
+      <div style="height:8px"></div>
+      <button class="btn sec" id="fc_keepgoing">🔥 Ohne Pause weiter</button>
+      <div style="height:8px"></div>
+      <button class="btn sec" id="fc_done2">✓ Aufgabe fertig</button>
+    </div>` : pomoBreakDone ? `<div class="focus-choice">
+      <b>☕️ Pause vorbei!</b>
+      <div style="font-size:13px;color:var(--dim);margin:6px 0 12px">Weiter mit „${esc(t.title)}"?</div>
+      <button class="btn" id="fc_nextround">🍅 Runde ${(f.round||1)+1} starten</button>
+      <div style="height:8px"></div>
+      <button class="btn sec" id="fc_done2">✓ Aufgabe fertig</button>
+      <div style="height:8px"></div>
+      <button class="btn sec" id="fc_stopnow">Genug für jetzt</button>
+    </div>` : fiveChoice ? `<div class="focus-choice">
       <b>5 Minuten geschafft! 💪</b>
       <div style="font-size:13px;color:var(--dim);margin:6px 0 12px">Du bist drin – weitermachen? Oder ehrenvoll aufhören, zählt beides.</div>
       <button class="btn" id="fc_more">🔥 Weitermachen</button>
       <div style="height:8px"></div>
       <button class="btn sec" id="fc_enough">Genug für heute</button>
     </div>` : `<div class="focus-btns">
-      <button class="btn" id="fc_done" style="background:var(--green);color:#08351d">✓ Fertig!</button>
-      ${!f.five && elapsed<60 ? `<button class="btn sec" id="fc_five">⏱ Nur 5 Minuten draus machen</button>` : ""}
+      ${onBreak ? "" : `<button class="btn" id="fc_done" style="background:var(--green);color:#08351d">✓ Fertig!</button>`}
+      ${!f.five && !f.pomo && elapsed<60 ? `<button class="btn sec" id="fc_five">⏱ Nur 5 Minuten draus machen</button>` : ""}
+      ${!f.five && !f.pomo && elapsed<60 ? `<button class="btn sec" id="fc_pomo">🍅 Pomodoro (25/5)</button>` : ""}
       <button class="btn sec" id="fc_cancel">Abbrechen</button>
     </div>`}
   `;
 
-  const done = $("#fc_done");
-  if (done) done.onclick = async ()=>{
-    const spent = Math.max(1, Math.round((Date.now()-f.start)/60000));
+  const finish = async ()=>{
+    const spent = Math.max(1, Math.round((Date.now()-(f.startedAt||f.start))/60000));
     clearInterval(_focusTimer);
     await completeTask(t, spent);
     const queue = (f.queue||[]).filter(id=>{
@@ -2657,10 +2806,25 @@ function renderFocus(){
       renderAll();
     }
   };
+  const done = $("#fc_done"); if (done) done.onclick = finish;
+  const done2 = $("#fc_done2"); if (done2) done2.onclick = finish;
   const five = $("#fc_five");
   if (five) five.onclick = ()=>{ const x=getFocus(); x.five=true; setFocusState(x); renderFocus(); };
   const cancel = $("#fc_cancel");
   if (cancel) cancel.onclick = stopFocus;
+  // Pomodoro
+  const pomoBtn = $("#fc_pomo");
+  if (pomoBtn) pomoBtn.onclick = ()=>{ const x=getFocus(); x.pomo=true; x.phase="work"; x.round=1;
+    x.start=Date.now(); x.startedAt=x.startedAt||f.start; x.askedPomo=false; setFocusState(x); renderFocus(); };
+  const brk = $("#fc_break");
+  if (brk) brk.onclick = ()=>{ const x=getFocus(); x.phase="break"; x.start=Date.now(); x.askedPomo=false; setFocusState(x); renderFocus(); };
+  const keep = $("#fc_keepgoing");
+  if (keep) keep.onclick = ()=>{ const x=getFocus(); x.askedPomo=true; setFocusState(x); renderFocus(); };
+  const nxt = $("#fc_nextround");
+  if (nxt) nxt.onclick = ()=>{ const x=getFocus(); x.phase="work"; x.round=(x.round||1)+1;
+    x.start=Date.now(); x.askedPomo=false; setFocusState(x); renderFocus(); };
+  const stopNow = $("#fc_stopnow");
+  if (stopNow) stopNow.onclick = ()=>{ toast(`🍅 ${getFocus()?.round||1} Runde(n) – sauber!`); stopFocus(); };
   const more = $("#fc_more");
   if (more) more.onclick = ()=>{ const x=getFocus(); x.five=false; x.askedFive=true; setFocusState(x); renderFocus(); };
   const enough = $("#fc_enough");
