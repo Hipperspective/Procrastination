@@ -287,13 +287,23 @@ details.moreopts[open] summary::before{content:'▾ ';}
 
 /* Home-Layout: mobil neu geordnet (Wichtiges oben), breit als Spalten */
 .m-sec{display:contents;}
+.qrow{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;}
+.qtile{aspect-ratio:1/1;margin:0 !important;display:flex;flex-direction:column;overflow:hidden;padding:13px 14px;}
 @media(max-width:979px){
   #view-home{display:flex;flex-direction:column;}
   .home-main,.home-left,.home-side{display:contents;}
   .m-sec{display:block;}
-  .m-hero{order:1;} .m-next{order:2;} .m-rout{order:3;} .m-blocks{order:4;}
-  .m-todo{order:5;} .m-post{order:6;} .m-chat{order:7;}
-  .m-stats{order:8;} .m-weather{order:9;} .m-planned{order:10;} .m-ww{order:11;}
+  .m-hero{order:1;} .m-quick{order:2;} .m-chat{order:3;}
+  .m-next{order:4;} .m-rout{order:5;} .m-blocks{order:6;}
+  .m-todo{order:7;} .m-post{order:8;} .m-stats{order:9;}
+  .m-planned{order:10;} .m-ww{order:11;}
+  .m-weather{display:none;}          /* große Wetterkarte nur am Desktop */
+  .xphide{display:none;}             /* XP-Zeile mobil ausblenden */
+  .hero{padding:16px 18px;}
+  .hero .greet{font-size:21px;}
+}
+@media(min-width:980px){
+  .m-quick{display:none;}            /* Quick-Kacheln nur mobil */
 }
 @media(min-width:980px){
   .container{max-width:1100px;}

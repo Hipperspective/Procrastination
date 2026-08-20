@@ -1368,6 +1368,32 @@ function homeBlockRows(){
   }).join("");
 }
 
+// Kompakte Kalender-Kachel (mobil, neben dem Wetter)
+function calTileHtml(){
+  const nowM = new Date().getHours()*60 + new Date().getMinutes();
+  const bAllDay = b => b.start_min<=0 && (b.end_min>=1439 || b.end_min<=60);
+  const today = blocksFor(dayKey(new Date())).filter(b=>b.type!=="sleep");
+  const upcoming = today.filter(b => bAllDay(b) || (b.end_min>b.start_min?b.end_min:1440) >= nowM).slice(0,3);
+  const tm = new Date(); tm.setDate(tm.getDate()+1);
+  const tomorrow = blocksFor(dayKey(tm)).filter(b=>b.type!=="sleep");
+  const row = b => {
+    const t = BLOCK_TYPES[b.type]||BLOCK_TYPES.event;
+    return `<div style="display:flex;gap:6px;align-items:baseline;font-size:12px;line-height:1.35;overflow:hidden">
+      <span style="font-variant-numeric:tabular-nums;font-weight:800;color:var(--accent2);flex-shrink:0">${bAllDay(b)?"📅":minToHM(b.start_min)}</span>
+      <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.ico} ${esc(b.title||t.label)}</span></div>`;
+  };
+  let body = upcoming.length ? upcoming.map(row).join("")
+    : `<div style="font-size:12.5px;color:var(--dim);padding:2px 0">Heute frei ✨</div>`;
+  let foot = "";
+  if (tomorrow.length){
+    const f = tomorrow[0], t = BLOCK_TYPES[f.type]||BLOCK_TYPES.event;
+    foot = `<div style="margin-top:auto;padding-top:6px;border-top:1px solid var(--line);font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+      Morgen: ${bAllDay(f)?"📅":minToHM(f.start_min)} ${t.ico} ${esc(f.title||t.label)}${tomorrow.length>1?` +${tomorrow.length-1}`:""}</div>`;
+  }
+  return `<div style="font-size:11px;color:var(--dim);font-weight:800;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">📅 Heute</div>
+    <div style="display:flex;flex-direction:column;gap:5px;flex:1;overflow:hidden">${body}</div>${foot}`;
+}
+
 const routineLocations = () => S.locations.filter(l=>l.is_routine);
 const isRoutineTask = t => routineLocations().some(l=>l.name.toLowerCase()===(t.location||"").toLowerCase());
 
@@ -1394,10 +1420,7 @@ function homePlanItems(){
   return items;
 }
 
-const homeCat = () => {
-  const v = localStorage.getItem("wopHomeCat") || "";
-  return S.locations.some(l=>l.name===v) ? v : "";
-};
+const homeCat = () => ""; // Kategorie-Dropdown entfernt – Karten sind ohnehin einklappbar
 // Auf/zu-Zustand der Kategorie-Karten (pro Gerät gemerkt)
 function homeCatState(){
   try { return JSON.parse(localStorage.getItem("wopHomeCatState")||"{}"); } catch(e){ return {}; }
@@ -1492,10 +1515,15 @@ async function renderHome(){
       <div class="greet">${greetingText()}, Finn! 👋</div>
       <div class="date">${dateStr}</div>
       ${streak>0?`<div class="streakline">🔥 ${streak} Tage-Streak – weiter so!</div>`:""}
-      ${xpLineHtml()}
+      <div class="xphide">${xpLineHtml()}</div>
     </div>
     ${frogCardHtml()}
     </div>
+
+    <div class="m-sec m-quick"><div class="qrow">
+      <div class="card qtile" id="wxTile"><div class="section-empty" style="padding:6px 0">Wetter…</div></div>
+      <div class="card qtile" id="calTile" role="button" tabindex="0" style="cursor:pointer">${calTileHtml()}</div>
+    </div></div>
 
     <div class="m-sec m-weather"><div class="card" id="weatherCard"><div class="section-empty">Wetter lädt…</div></div></div>
 
@@ -1523,10 +1551,6 @@ async function renderHome(){
     <div class="card">${homeBlockRows()}</div>` : "" }</div>
     <div class="m-sec m-next">
     <div class="homehead"><h2>📋 Als Nächstes</h2><div style="display:flex;align-items:center;gap:12px">
-      <select id="homeCatFilter" style="width:auto;padding:5px 8px;font-size:12.5px;border-radius:9px">
-        <option value="">Alle Kategorien</option>
-        ${S.locations.filter(l=>!l.is_routine).map(l=>`<option value="${esc(l.name)}" ${homeCat()===l.name?"selected":""}>${esc(l.name)}</option>`).join("")}
-      </select>
       <a id="homeRandom" title="Zufällig eine wählen">🎲</a>
       <a id="homeToTasks">Alle ›</a></div></div>
     ${ homeGroupedPlan(homeCat() ? openPlan.filter(p=>(p.t.location||"")===homeCat()) : openPlan, planRow)
@@ -1554,6 +1578,7 @@ async function renderHome(){
     const b=S.timeBlocks.find(x=>x.id===row.dataset.block); if(b) openBlockForm(b);
   });
   $("#homeWork").onclick = ()=>switchTab("work");
+  const ct = $("#calTile"); if (ct) ct.onclick = ()=>{ S.planDate=dayKey(new Date()); switchTab("plan"); };
   $$(".homecathead", el).forEach(h=>h.onclick = ()=>{
     const name = h.dataset.cat;
     const st = homeCatState();
@@ -1561,8 +1586,6 @@ async function renderHome(){
     setHomeCatState(name, !cur);
     renderHome();
   });
-  const hcf = $("#homeCatFilter", el);
-  if (hcf) hcf.onchange = ()=>{ localStorage.setItem("wopHomeCat", hcf.value); renderHome(); };
   $$(".homeMoreCat", el).forEach(a=>a.onclick = ()=>{
     S.locFilter = S.locations.some(l=>l.name===a.dataset.loc) ? a.dataset.loc : "ALLE";
     switchTab("tasks");
@@ -1589,6 +1612,7 @@ async function renderHome(){
 
   // Wetter asynchron nachladen
   const wc = $("#weatherCard");
+  const wt = $("#wxTile");
   const geo = localStorage.getItem("wopGeo");
   if (!geo){
     wc.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
@@ -1598,9 +1622,19 @@ async function renderHome(){
         <button class="btn small" id="btnCity">🏙 Ort eingeben</button></div></div>`;
     $("#btnGeo").onclick = askGeo;
     $("#btnCity").onclick = openCityPicker;
+    if (wt){
+      wt.innerHTML = `<div style="font-size:12.5px;color:var(--dim);margin-bottom:8px">🌤 Wetter?</div>
+        <button class="btn small sec" id="btnGeoT" style="margin-bottom:6px">📍 Standort</button>
+        <button class="btn small" id="btnCityT">🏙 Ort</button>`;
+      $("#btnGeoT").onclick = askGeo;
+      $("#btnCityT").onclick = openCityPicker;
+    }
   } else {
     const w = await fetchWeather();
-    if (!w || !w.current){ wc.innerHTML = `<div class="section-empty">Wetter gerade nicht verfügbar.</div>`; }
+    if (!w || !w.current){
+      wc.innerHTML = `<div class="section-empty">Wetter gerade nicht verfügbar.</div>`;
+      if (wt) wt.innerHTML = `<div class="section-empty" style="padding:6px 0">Wetter nicht verfügbar</div>`;
+    }
     else {
       const [ico,txt] = WMO[w.current.weather_code] || ["🌡","–"];
       const dmax = Math.round(w.daily.temperature_2m_max[0]), dmin = Math.round(w.daily.temperature_2m_min[0]);
@@ -1614,6 +1648,17 @@ async function renderHome(){
       </div>
       <div style="text-align:right;margin-top:6px"><a style="font-size:11.5px;color:var(--dim2);cursor:pointer" id="wChange">Standort ändern</a></div>`;
       $("#wChange").onclick = openCityPicker;
+      if (wt){
+        wt.innerHTML = `
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <span style="font-size:30px;line-height:1">${ico}</span>
+            <span style="font-size:26px;font-weight:800">${Math.round(w.current.temperature_2m)}°</span>
+          </div>
+          <div style="font-size:11.5px;color:var(--dim);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${txt}${locName?" · "+esc(locName):""}</div>
+          <div style="font-size:11.5px;color:var(--dim);margin-top:auto">H ${dmax}° · T ${dmin}° · ☔️ ${rain??0}%<br>Morgen: ${ico2} ${Math.round(w.daily.temperature_2m_max[1])}°</div>`;
+        wt.style.cursor = "pointer";
+        wt.onclick = openCityPicker;
+      }
     }
   }
 }
