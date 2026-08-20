@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 34; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 35; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -1540,7 +1540,7 @@ function homeGroupedPlan(openPlan, planRow){
         ${dueN&&!isOpen?`<span style="font-size:10.5px;font-weight:800;color:var(--amber)">${dueN} fällig</span>`:""}
         <span style="margin-left:auto"></span>
       </div>
-      ${isOpen ? g.arr.slice(0,PER_CAT).map(planRow).join("")
+      ${isOpen ? g.arr.slice(0,PER_CAT).map(p=>planRow(p, g.name!=="Sonstiges")).join("")
         + (g.arr.length>PER_CAT?`<div style="text-align:center;padding-top:6px"><a class="homeMoreCat" data-loc="${esc(g.name)}" style="color:var(--accent2);font-size:12px;font-weight:700;cursor:pointer">＋ ${g.arr.length-PER_CAT} weitere ›</a></div>`:"") : ""}
     </div>`;
   }).join("");
@@ -1575,11 +1575,11 @@ async function renderHome(){
   const plan = homePlanItems();
   const openPlan = plan.filter(p=>!p.done), donePlan = plan.filter(p=>p.done);
 
-  const planRow = p => {
+  const planRow = (p, hideLoc) => {
     const t = p.t;
     const bits = [];
     bits.push(fmtMin(t.duration_minutes));
-    if (t.location) bits.push(esc(t.location));
+    if (t.location && !hideLoc) bits.push(esc(t.location)); // in Kategorie-Karten redundant
     if (!p.done && t.repeat_count>1) bits.push(`${effCompletedToday(t)}/${t.repeat_count}×`);
     const st = taskDueState(t);
     if (!p.done && st.label && st.cls) bits.push(`<span class="${st.cls}">${st.label}</span>`);
@@ -2014,7 +2014,7 @@ Heute ist ${today.toLocaleDateString("de-DE",{weekday:"long",day:"2-digit",month
 Du kannst per Tools Aufgaben, Termine (Zeitblöcke) und Arbeitszeiten anlegen, Aufgaben abhaken und Termine löschen.
 Du bist außerdem AUSKUNFT: Fragen wie "Was steht morgen an?", "Wie viel hab ich diese Woche gearbeitet?", "Wie ist mein Saldo?", "Was hab ich heute geschafft?" beantwortest du direkt und konkret mit den Zahlen aus LIVE-DATEN, den offenen Aufgaben und dem Kalender unten – ohne Tool-Aufruf. Sei dabei ein echter Assistent: Fasse zusammen, denk mit (z.B. "dein Tag ist eng, die 3 Aufgaben passen zwischen 14 und 16 Uhr") und schlag proaktiv Nächstes vor, wenn es hilft.
 Relative Datumsangaben ("morgen", "Freitag") immer in konkrete Daten umrechnen. Bei fehlender Endzeit eines Termins nimm 1 Stunde.
-ERINNERUNGEN ("erinnere mich am X um Y an Z"): create_task mit scheduled_date + scheduled_time und is_priority=true. Die App blendet sie automatisch erst ab dem Vortag ein und schickt zur Uhrzeit eine Push-Nachricht.
+ERINNERUNGEN ("erinnere mich am X um Y an Z"): create_task mit scheduled_date + scheduled_time und is_priority=true. Die App blendet sie automatisch erst ab dem Vortag ein und schickt zur Uhrzeit eine Push-Nachricht. WICHTIG: Eine Erinnerung für HEUTE ist SOFORT sichtbar und der Push kommt heute zur Uhrzeit – sag dann NIE "erscheint ab morgen". Übernimm die Sichtbarkeits-Info wörtlich aus dem Tool-Ergebnis.
 KORREKTUREN: Wenn sich eine Nachricht auf einen gerade angelegten/besprochenen Eintrag bezieht ("bis 23 Uhr", "doch ohne Uhrzeit", "verschieb auf Montag"), IMMER update_appointment/update_task verwenden – NIE einen zweiten Eintrag anlegen.
 Termin ohne Uhrzeit ("nur Hinweis, dass er kommt"): create_appointment OHNE start/end -> ganztägig.
 URLAUB/KRANK ("ich bin nächste Woche auf Urlaub", "war gestern krank"): add_absence – Werktage zählen automatisch als Arbeitszeit-Gutschrift.
@@ -2045,7 +2045,8 @@ async function aiExecTool(name, args){
         // Erst am Vortag in den Listen auftauchen
         const prev = new Date(args.scheduled_date+"T00:00:00"); prev.setDate(prev.getDate()-1);
         row.start_date = dayKey(prev) + "T00:00:00";
-        info = `Erinnerung "${args.title}" für ${args.scheduled_date}${args.scheduled_time?" "+args.scheduled_time:""} – erscheint ab ${dayKey(prev)}${args.scheduled_time?", Push um "+args.scheduled_time:""}`;
+        const sofort = args.scheduled_date <= dayKey(new Date());
+        info = `Erinnerung "${args.title}" für ${args.scheduled_date}${args.scheduled_time?" "+args.scheduled_time:""} – ${sofort?"ab sofort in der Liste sichtbar":"erscheint ab "+dayKey(prev)}${args.scheduled_time?", Push um "+args.scheduled_time:""}`;
       }
       const { error } = await sb.from("tasks").insert(row);
       if (error) throw error;
