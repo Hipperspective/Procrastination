@@ -1,5 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
+const APP_VERSION = 34; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -1198,7 +1199,7 @@ function openSettings(){
     <div style="height:8px"></div>
     <button class="btn sec" id="s_savekey">Key speichern</button>
     <div style="height:20px"></div>
-    <div class="card" style="font-size:13px;color:var(--dim)">Angemeldet als <b style="color:var(--text)">${esc(S.user.email)}</b></div>
+    <div class="card" style="font-size:13px;color:var(--dim)">Angemeldet als <b style="color:var(--text)">${esc(S.user.email)}</b> · App v${APP_VERSION}</div>
     <button class="btn danger" id="s_logout">Abmelden</button>
   `);
   renderNotifySettings();
@@ -2386,6 +2387,9 @@ async function enablePush(){
     const perm = await Notification.requestPermission();
     if (perm !== "granted"){ toast("Benachrichtigungen wurden nicht erlaubt.", true); return; }
     const reg = await navigator.serviceWorker.ready;
+    // Altes Abo (evtl. mit altem Schlüssel) immer erst sauber entfernen
+    const old = await reg.pushManager.getSubscription();
+    if (old){ try { await sb.from("push_subscriptions").delete().eq("endpoint", old.endpoint); await old.unsubscribe(); } catch(e){} }
     const sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: b64ToU8(VAPID_PUBLIC_KEY),
