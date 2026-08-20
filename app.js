@@ -2389,6 +2389,30 @@ async function disablePush(){
   renderNotifySettings();
 }
 
+// Test-Push über die Edge Function: prüft die komplette Kette (Function → VAPID → Abo → Gerät)
+async function sendTestPush(btn){
+  btn.disabled = true; const orig = btn.textContent; btn.textContent = "Sende…";
+  try {
+    const { data } = await sb.auth.getSession();
+    const token = data && data.session && data.session.access_token;
+    if (!token) throw new Error("keine Session");
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/push?action=test`, {
+      method: "POST", headers: { Authorization: "Bearer " + token } });
+    const d = await r.json().catch(()=>null);
+    if (r.ok && d && d.delivered > 0)
+      toast(`✅ An ${d.delivered} Gerät${d.delivered>1?"e":""} gesendet – gleich müsste es klingeln!`);
+    else if (r.ok && d && d.devices === 0)
+      toast("Kein Gerät angemeldet – Push oben zuerst aktivieren.", true);
+    else if (r.ok && d)
+      toast(`0 zugestellt, ${d.failed} fehlgeschlagen – VAPID-Key/Abos prüfen.`, true);
+    else if (r.status === 404)
+      toast("Edge Function antwortet nicht – neu deployen (edge-function-push.ts)!", true);
+    else
+      toast(`Test fehlgeschlagen (${r.status}) – Edge Function schon neu deployed?`, true);
+  } catch(e){ toast("Test fehlgeschlagen: " + (e.message||e), true); }
+  btn.disabled = false; btn.textContent = orig;
+}
+
 async function renderNotifySettings(){
   const box = $("#s_notifyBox"); if (!box) return;
   const status = await pushStatus();
@@ -2407,6 +2431,7 @@ async function renderNotifySettings(){
     ${ status==="unsupported" ? `<div class="section-empty">Auf iPhone/iPad: App zuerst über Teilen → „Zum Home-Bildschirm" installieren und von dort öffnen – dann geht's.</div>` : `
     <div class="switch"><label>${status==="on"?"✅ Aktiv auf diesem Gerät":"Auf diesem Gerät aktivieren"}</label>
       <button class="toggle ${status==="on"?"on":""}" id="n_toggle"></button></div>` }
+    <button class="btn small sec" id="n_test" style="margin:6px 0 10px">🔔 Test-Push senden</button>
     <div class="switch"><label>📋 Tages-Überblick (fällige Aufgaben)</label>
       <button class="toggle ${digestOn?"on":""}" id="n_digest"></button></div>
     <div class="mrow" ${digestOn?"":'style="display:none"'} id="n_digestrow">
@@ -2440,6 +2465,8 @@ async function renderNotifySettings(){
   const hmToMin = v => { const [h,m]=v.split(":").map(Number); return h*60+(m||0); };
   const nt = $("#n_toggle");
   if (nt) nt.onclick = ()=> nt.classList.contains("on") ? disablePush() : enablePush();
+  const tb = $("#n_test");
+  if (tb) tb.onclick = ()=>sendTestPush(tb);
   $("#n_digest").onclick = async e=>{
     await saveSetting("notifyDigestEnabled", !digestOn); renderNotifySettings();
   };
