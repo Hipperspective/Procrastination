@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 36; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 37; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -1442,16 +1442,37 @@ function homeBlockRows(){
     if (bAllDay){
       return `<div class="planrow" data-block="${b.id}" role="button" tabindex="0">
         <span class="ptime">📅</span>
-        <span class="pt">${t.ico} ${esc(b.title||t.label)}</span>
+        <span class="pt">${blockIco(b)} ${esc(b.title||t.label)}</span>
         <span class="pm">ganztägig</span></div>`;
     }
     const endEff = b.end_min > b.start_min ? b.end_min : 1440;
     const past = endEff < nowM;
     return `<div class="planrow ${past?"pdone":""}" data-block="${b.id}">
       <span class="ptime">${minToHM(b.start_min)}</span>
-      <span class="pt">${t.ico} ${esc(b.title||t.label)}</span>
+      <span class="pt">${blockIco(b)} ${esc(b.title||t.label)}</span>
       <span class="pm">bis ${minToHM(b.end_min)}</span></div>`;
   }).join("");
+}
+
+// 📍 Wo bin ich? – aus vergangenen Reise-Blöcken (Ziel gilt ab Ankunft), plus nächste Reise
+function whereAmI(){
+  let name = null;
+  try { const g = JSON.parse(localStorage.getItem("wopGeo")||"null");
+    if (g && g.name && g.name !== "Mein Standort") name = g.name; } catch(e){}
+  const todayK = dayKey(new Date());
+  const nowM = new Date().getHours()*60 + new Date().getMinutes();
+  let nextTrip = null;
+  for (let i=-14; i<=7; i++){
+    const d = new Date(); d.setDate(d.getDate()+i);
+    const dk = dayKey(d);
+    for (const b of blocksFor(dk).filter(x=>x.type==="travel").sort((a,c)=>a.start_min-c.start_min)){
+      const dest = travelDest(b.title);
+      const past = dk < todayK || (dk === todayK && (b.end_min>b.start_min?b.end_min:1440) <= nowM);
+      if (past){ if (dest) name = dest; }
+      else if (!nextTrip){ nextTrip = { b, d, dk, dest }; }
+    }
+  }
+  return { name, nextTrip };
 }
 
 // Kompakte Kalender-Kachel (mobil, neben dem Wetter)
@@ -1466,7 +1487,7 @@ function calTileHtml(){
     const t = BLOCK_TYPES[b.type]||BLOCK_TYPES.event;
     return `<div style="display:flex;gap:6px;align-items:baseline;font-size:12px;line-height:1.35;overflow:hidden">
       <span style="font-variant-numeric:tabular-nums;font-weight:800;color:var(--accent2);flex-shrink:0">${bAllDay(b)?"📅":minToHM(b.start_min)}</span>
-      <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.ico} ${esc(b.title||t.label)}</span></div>`;
+      <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${blockIco(b)} ${esc(b.title||t.label)}</span></div>`;
   };
   let body = upcoming.length ? upcoming.map(row).join("")
     : `<div style="font-size:12.5px;color:var(--dim);padding:2px 0">Heute frei ✨</div>`;
@@ -1474,10 +1495,19 @@ function calTileHtml(){
   if (tomorrow.length){
     const f = tomorrow[0], t = BLOCK_TYPES[f.type]||BLOCK_TYPES.event;
     foot = `<div style="margin-top:auto;padding-top:6px;border-top:1px solid var(--line);font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-      Morgen: ${bAllDay(f)?"📅":minToHM(f.start_min)} ${t.ico} ${esc(f.title||t.label)}${tomorrow.length>1?` +${tomorrow.length-1}`:""}</div>`;
+      Morgen: ${bAllDay(f)?"📅":minToHM(f.start_min)} ${blockIco(f)} ${esc(f.title||t.label)}${tomorrow.length>1?` +${tomorrow.length-1}`:""}</div>`;
   }
-  return `<div style="font-size:11px;color:var(--dim);font-weight:800;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">📅 Heute</div>
-    <div style="display:flex;flex-direction:column;gap:5px;flex:1;overflow:hidden">${body}</div>${foot}`;
+  const w = whereAmI();
+  let trip = "";
+  if (w.nextTrip){
+    const nt = w.nextTrip;
+    const when = nt.dk===dayKey(new Date()) ? minToHM(nt.b.start_min) : WEEKDAYS_DE[nt.d.getDay()];
+    trip = `<div style="font-size:11px;font-weight:700;color:var(--accent2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px">${travelIcon(nt.b.title)} ${when} → ${esc(nt.dest || nt.b.title || "Reise")}</div>`;
+  }
+  return `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px;margin-bottom:6px">
+      <span style="font-size:11px;color:var(--dim);font-weight:800;text-transform:uppercase;letter-spacing:.04em">📅 Heute</span>
+      ${w.name?`<span style="font-size:10.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">📍 ${esc(w.name)}</span>`:""}</div>
+    <div style="display:flex;flex-direction:column;gap:5px;flex:1;overflow:hidden">${body}${trip}</div>${foot}`;
 }
 
 const routineLocations = () => S.locations.filter(l=>l.is_routine);
@@ -1764,6 +1794,16 @@ const BLOCK_TYPES = {
 const BLOCK_PALETTE = { red:"#ff5d6c", orange:"#ff9f43", yellow:"#ffd54f", green:"#3ddc84",
   teal:"#38d4c3", blue:"#5b8def", indigo:"#7986cb", purple:"#b58cff", pink:"#f48fb1", brown:"#a1887f" };
 const blockColor = b => (b.color && BLOCK_PALETTE[b.color]) || (BLOCK_TYPES[b.type]||BLOCK_TYPES.event).color;
+// Reise-Icon nach Verkehrsmittel im Titel (✈️ Flug, 🚆 Zug, 🚌 Bus, ⛴ Fähre, sonst 🚗)
+function travelIcon(title){
+  const t = String(title||"").toLowerCase();
+  if (/flug|flieg|flight|✈/.test(t)) return "✈️";
+  if (/zug|bahn|train|railjet|🚆|🚄/.test(t)) return "🚆";
+  if (/\bbus\b/.test(t)) return "🚌";
+  if (/schiff|fähre|ferry/.test(t)) return "⛴";
+  return "🚗";
+}
+function blockIco(b){ return b.type==="travel" ? travelIcon(b.title) : (BLOCK_TYPES[b.type]||BLOCK_TYPES.event).ico; }
 const minToHM = m => `${pad(Math.floor(m/60))}:${pad(m%60)}`;
 const blocksFor = dk => S.timeBlocks.filter(b=>b.date===dk).sort((a,b)=>a.start_min-b.start_min);
 
@@ -1803,7 +1843,7 @@ function renderPlan(){
       const c = blockColor(b), t = BLOCK_TYPES[b.type]||BLOCK_TYPES.event;
       return `<div class="tl-allday" data-id="${b.id}" role="button" tabindex="0" style="background:${c}22;border:1px solid ${c}55;
         border-left:4px solid ${c};border-radius:10px;padding:7px 12px;font-size:13px;font-weight:700;cursor:pointer">
-        ${t.ico} ${esc(b.title||t.label)} <span style="font-weight:500;opacity:.65;font-size:11.5px">ganztägig</span></div>`;
+        ${blockIco(b)} ${esc(b.title||t.label)} <span style="font-weight:500;opacity:.65;font-size:11.5px">ganztägig</span></div>`;
     }).join("") + `</div>`;
   }
   // Timeline 05–24 Uhr (Blöcke davor werden geklemmt)
@@ -1822,7 +1862,7 @@ function renderPlan(){
     const t = BLOCK_TYPES[b.type]||BLOCK_TYPES.event;
     tl += `<div class="tl-block" data-id="${b.id}" role="button" tabindex="0" style="top:${top(b.start_min)+1}px;height:${h}px;
       background:${c}22;border-left-color:${c}">
-      <b>${t.ico} ${esc(b.title||t.label)}</b>
+      <b>${blockIco(b)} ${esc(b.title||t.label)}</b>
       ${h>34?`<span>${minToHM(b.start_min)}–${minToHM(b.end_min)}${b.notes?" · "+esc(b.notes):""}</span>`:""}</div>`;
   });
   tl += `</div>`;
@@ -2017,6 +2057,7 @@ Relative Datumsangaben ("morgen", "Freitag") immer in konkrete Daten umrechnen. 
 ERINNERUNGEN ("erinnere mich am X um Y an Z"): create_task mit scheduled_date + scheduled_time und is_priority=true. Die App blendet sie automatisch erst ab dem Vortag ein und schickt zur Uhrzeit eine Push-Nachricht. WICHTIG: Eine Erinnerung für HEUTE ist SOFORT sichtbar und der Push kommt heute zur Uhrzeit – sag dann NIE "erscheint ab morgen". Übernimm die Sichtbarkeits-Info wörtlich aus dem Tool-Ergebnis.
 KORREKTUREN: Wenn sich eine Nachricht auf einen gerade angelegten/besprochenen Eintrag bezieht ("bis 23 Uhr", "doch ohne Uhrzeit", "verschieb auf Montag"), IMMER update_appointment/update_task verwenden – NIE einen zweiten Eintrag anlegen.
 Termin ohne Uhrzeit ("nur Hinweis, dass er kommt"): create_appointment OHNE start/end -> ganztägig.
+REISEN ("Freitag Flug nach Wien 14 Uhr", "Montag mit dem Zug nach Salzburg"): create_appointment mit type=travel und Titel mit Verkehrsmittel + Ziel, z.B. "Flug nach Wien" oder "Zug Salzburg → Wien". Das Ziel steuert dann automatisch Wetter-Woche und 📍-Anzeige.
 URLAUB/KRANK ("ich bin nächste Woche auf Urlaub", "war gestern krank"): add_absence – Werktage zählen automatisch als Arbeitszeit-Gutschrift.
 Verfügbare Orte/Listen: ${S.locations.map(l=>l.name).join(", ")}. Wenn kein Ort passt, nimm "To-Do".
 Antworte kurz, freundlich, auf Deutsch. Fasse nach Tool-Aufrufen knapp zusammen, was du angelegt hast.
@@ -3199,12 +3240,12 @@ function plannedCardHtml(){
     if (bAllDay) return `<div class="planrow" data-pblock="${b.id}" role="button" tabindex="0" style="padding:7px 0">
       <span class="ptime" style="min-width:40px">📅</span>
       <span style="width:8px;height:8px;min-width:8px;border-radius:50%;background:${blockColor(b)}"></span>
-      <span class="pt" style="font-size:13.5px">${esc(b.title||t.label)}</span>
+      <span class="pt" style="font-size:13.5px">${blockIco(b)} ${esc(b.title||t.label)}</span>
       <span class="pm">ganztägig</span></div>`;
     return `<div class="planrow" data-pblock="${b.id}" role="button" tabindex="0" style="padding:7px 0">
       <span class="ptime" style="min-width:40px">${minToHM(b.start_min)}</span>
       <span style="width:8px;height:8px;min-width:8px;border-radius:50%;background:${blockColor(b)}"></span>
-      <span class="pt" style="font-size:13.5px">${esc(b.title||t.label)}</span>
+      <span class="pt" style="font-size:13.5px">${blockIco(b)} ${esc(b.title||t.label)}</span>
       <span class="pm">${minToHM(b.end_min)}</span>
     </div>`;
   };
@@ -3393,7 +3434,7 @@ function planUpcomingHtml(){
     return `<div class="planrow" data-pblock="${b.id}" role="button" tabindex="0" style="padding:7px 0">
       <span class="ptime" style="min-width:52px;font-size:11px">${when}</span>
       <span style="width:8px;height:8px;min-width:8px;border-radius:50%;background:${c}"></span>
-      <span class="pt" style="font-size:13px">${esc(b.title||t.label)}</span>
+      <span class="pt" style="font-size:13px">${blockIco(b)} ${esc(b.title||t.label)}</span>
       <span class="pm">${bAllDay?"ganztägig":minToHM(b.start_min)}</span>
     </div>`;
   }).join("");
