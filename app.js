@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 37; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 38; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -1489,25 +1489,40 @@ function calTileHtml(){
       <span style="font-variant-numeric:tabular-nums;font-weight:800;color:var(--accent2);flex-shrink:0">${bAllDay(b)?"📅":minToHM(b.start_min)}</span>
       <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${blockIco(b)} ${esc(b.title||t.label)}</span></div>`;
   };
-  let body = upcoming.length ? upcoming.map(row).join("")
-    : `<div style="font-size:12.5px;color:var(--dim);padding:2px 0">Heute frei ✨</div>`;
-  let foot = "";
-  if (tomorrow.length){
-    const f = tomorrow[0], t = BLOCK_TYPES[f.type]||BLOCK_TYPES.event;
-    foot = `<div style="margin-top:auto;padding-top:6px;border-top:1px solid var(--line);font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-      Morgen: ${bAllDay(f)?"📅":minToHM(f.start_min)} ${blockIco(f)} ${esc(f.title||t.label)}${tomorrow.length>1?` +${tomorrow.length-1}`:""}</div>`;
-  }
   const w = whereAmI();
+  let head = "📅 Heute", body = "", foot = "";
+  if (upcoming.length){
+    body = upcoming.map(row).join("");
+    if (tomorrow.length){
+      const f = tomorrow[0], t = BLOCK_TYPES[f.type]||BLOCK_TYPES.event;
+      foot = `<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--line);font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+        Morgen: ${bAllDay(f)?"📅":minToHM(f.start_min)} ${blockIco(f)} ${esc(f.title||t.label)}${tomorrow.length>1?` +${tomorrow.length-1}`:""}</div>`;
+    }
+  } else {
+    // Heute nichts → nächsten Termin der kommenden 14 Tage zeigen (statt "Heute frei"-Leerkarte)
+    outer: for (let i=1;i<=14;i++){
+      const d = new Date(); d.setDate(d.getDate()+i);
+      for (const b of blocksFor(dayKey(d)).filter(x=>x.type!=="sleep").sort((a,c)=>a.start_min-c.start_min)){
+        const t = BLOCK_TYPES[b.type]||BLOCK_TYPES.event;
+        head = "📅 Demnächst";
+        body = `<div style="display:flex;gap:6px;align-items:baseline;font-size:12px;line-height:1.35;overflow:hidden">
+          <span style="font-weight:800;color:var(--accent2);flex-shrink:0">${i===1?"Morgen":WEEKDAYS_DE[d.getDay()]+" "+d.getDate()+"."}</span>
+          <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${bAllDay(b)?"":minToHM(b.start_min)+" "}${blockIco(b)} ${esc(b.title||t.label)}</span></div>`;
+        break outer;
+      }
+    }
+  }
   let trip = "";
   if (w.nextTrip){
     const nt = w.nextTrip;
     const when = nt.dk===dayKey(new Date()) ? minToHM(nt.b.start_min) : WEEKDAYS_DE[nt.d.getDay()];
     trip = `<div style="font-size:11px;font-weight:700;color:var(--accent2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px">${travelIcon(nt.b.title)} ${when} → ${esc(nt.dest || nt.b.title || "Reise")}</div>`;
   }
+  if (!body && !trip) return ""; // nichts zu zeigen → Karte ganz weglassen
   return `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px;margin-bottom:6px">
-      <span style="font-size:11px;color:var(--dim);font-weight:800;text-transform:uppercase;letter-spacing:.04em">📅 Heute</span>
+      <span style="font-size:11px;color:var(--dim);font-weight:800;text-transform:uppercase;letter-spacing:.04em">${head}</span>
       ${w.name?`<span style="font-size:10.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">📍 ${esc(w.name)}</span>`:""}</div>
-    <div style="display:flex;flex-direction:column;gap:5px;flex:1;overflow:hidden">${body}${trip}</div>${foot}`;
+    <div style="display:flex;flex-direction:column;gap:5px;overflow:hidden">${body}${trip}</div>${foot}`;
 }
 
 const routineLocations = () => S.locations.filter(l=>l.is_routine);
@@ -1628,18 +1643,21 @@ async function renderHome(){
     <div class="home-main">
     <div class="m-sec m-hero">
     <div class="hero">
-      <div class="greet">${greetingText()}, Finn! 👋</div>
-      <div class="date">${dateStr}</div>
-      ${streak>0?`<div class="streakline">🔥 ${streak} Tage-Streak – weiter so!</div>`:""}
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+        <div style="min-width:0">
+          <div class="greet">${greetingText()}, Finn! 👋</div>
+          <div class="date">${dateStr}</div>
+          ${streak>0?`<div class="streakline">🔥 ${streak} Tage-Streak – weiter so!</div>`:""}
+        </div>
+        <div id="heroWx" class="herowx"></div>
+      </div>
       <div class="xphide">${xpLineHtml()}</div>
     </div>
     ${frogCardHtml()}
     </div>
 
-    <div class="m-sec m-quick"><div class="qrow">
-      <div class="card qtile" id="wxTile"><div class="section-empty" style="padding:6px 0">Wetter…</div></div>
-      <div class="card qtile" id="calTile" role="button" tabindex="0" style="cursor:pointer">${calTileHtml()}</div>
-    </div></div>
+    ${(()=>{ const c = calTileHtml(); return c ? `<div class="m-sec m-quick">
+      <div class="card qtile" id="calTile" role="button" tabindex="0" style="cursor:pointer">${c}</div></div>` : ""; })()}
 
     <div class="m-sec m-weather"><div class="card" id="weatherCard"><div class="section-empty">Wetter lädt…</div></div></div>
 
@@ -1728,7 +1746,7 @@ async function renderHome(){
 
   // Wetter asynchron nachladen
   const wc = $("#weatherCard");
-  const wt = $("#wxTile");
+  const wt = $("#heroWx");
   const geo = localStorage.getItem("wopGeo");
   if (!geo){
     wc.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
@@ -1739,11 +1757,8 @@ async function renderHome(){
     $("#btnGeo").onclick = askGeo;
     $("#btnCity").onclick = openCityPicker;
     if (wt){
-      wt.innerHTML = `<div style="font-size:12.5px;color:var(--dim);margin-bottom:8px">🌤 Wetter?</div>
-        <button class="btn small sec" id="btnGeoT" style="margin-bottom:6px">📍 Standort</button>
-        <button class="btn small" id="btnCityT">🏙 Ort</button>`;
-      $("#btnGeoT").onclick = askGeo;
-      $("#btnCityT").onclick = openCityPicker;
+      wt.innerHTML = `<button class="btn small sec" id="btnCityH" style="white-space:nowrap">🌤 Ort wählen</button>`;
+      $("#btnCityH").onclick = openCityPicker;
     }
   } else {
     const w = await fetchWeather();
@@ -1766,12 +1781,12 @@ async function renderHome(){
       $("#wChange").onclick = openCityPicker;
       if (wt){
         wt.innerHTML = `
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <span style="font-size:30px;line-height:1">${ico}</span>
-            <span style="font-size:26px;font-weight:800">${Math.round(w.current.temperature_2m)}°</span>
+          <div style="display:flex;align-items:center;gap:7px;justify-content:flex-end">
+            <span style="font-size:27px;line-height:1">${ico}</span>
+            <span style="font-size:24px;font-weight:800">${Math.round(w.current.temperature_2m)}°</span>
           </div>
-          <div style="font-size:11.5px;color:var(--dim);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${txt}${locName?" · "+esc(locName):""}</div>
-          <div style="font-size:11.5px;color:var(--dim);margin-top:auto">H ${dmax}° · T ${dmin}° · ☔️ ${rain??0}%<br>Morgen: ${ico2} ${Math.round(w.daily.temperature_2m_max[1])}°</div>`;
+          <div style="font-size:10.5px;color:var(--dim);text-align:right;margin-top:3px;white-space:nowrap">
+            H ${dmax}° · T ${dmin}°${(rain??0)>=30?` · ☔️ ${rain}%`:""}<br>Morgen: ${ico2} ${Math.round(w.daily.temperature_2m_max[1])}°</div>`;
         wt.style.cursor = "pointer";
         wt.onclick = openCityPicker;
       }

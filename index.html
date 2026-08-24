@@ -312,8 +312,9 @@ details.moreopts[open] summary::before{content:'▾ ';}
 
 /* Home-Layout: mobil neu geordnet (Wichtiges oben), breit als Spalten */
 .m-sec{display:contents;}
-.qrow{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;}
-.qtile{aspect-ratio:1/1;margin:0 !important;display:flex;flex-direction:column;overflow:hidden;padding:13px 14px;}
+.qtile{margin:0 0 12px !important;display:flex;flex-direction:column;overflow:hidden;padding:12px 14px;}
+.herowx{flex-shrink:0;}
+@media(min-width:980px){.herowx{display:none;}}
 @media(max-width:979px){
   #view-home{display:flex;flex-direction:column;}
   .home-main,.home-left,.home-side{display:contents;}
