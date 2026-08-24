@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 40; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 42; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -278,7 +278,9 @@ async function completeTask(t){
     if (loc && loc.is_work_location && !runningEntry()){
       const end = new Date();
       const start = new Date(end - Math.max(1,t.duration_minutes)*60000);
-      const { error: wErr } = await sb.from("work_entries").insert({ start_time:start.toISOString(), end_time:end.toISOString(), notes:"Task: "+t.title });
+      const accM = workAccounts().find(a=>a.toLowerCase() === (t.location||"").toLowerCase());
+      const { error: wErr } = await sb.from("work_entries").insert({ start_time:start.toISOString(), end_time:end.toISOString(), notes:"Task: "+t.title,
+        account: accM && accM!==workAccounts()[0] ? accM : null });
       toast(wErr ? "Arbeitszeit nicht gebucht: "+wErr.message : `✓ Erledigt · +${xpGain} XP – Arbeitszeit gebucht`, !!wErr);
     } else {
       toast(fullyDone ? `✓ Erledigt · +${xpGain} XP` : `✓ ${count}/${t.repeat_count} · +${xpGain} XP`);
@@ -720,6 +722,14 @@ async function serverOpenEntry(){
   return (data && data[0]) || null;
 }
 
+// ---- Zeitkonten: Hauptjob (Soll/Saldo/Urlaub) + Nebenkonten (nur Stunden, eigenes Konto) ----
+function workAccounts(){
+  const main = getSetting("workMainAccount", "Fleischmann Vermessung");
+  const extra = getSetting("workAccounts", ["Mozarteumorchester","Hipper Machines"]);
+  return [main, ...(Array.isArray(extra)?extra:[]).filter(x=>x && x!==main)];
+}
+const entryAcc = w => w.account || workAccounts()[0];
+
 // ---- Abwesenheiten (Urlaub/Krank/Feiertag): zählen als Soll-Gutschrift ----
 function getAbsences(){ const a = getSetting("absences", []); return Array.isArray(a) ? a : []; }
 async function saveAbsences(list){ await saveSetting("absences", list); }
@@ -751,13 +761,18 @@ function renderWork(){
   const now = new Date();
   const curKey = periodKeyOf(now, mode);
 
-  const run = runningEntry();
-  const closed = S.workEntries.filter(w=>w.end_time);
-  const thisPeriod = S.workEntries.filter(w => periodKeyOf(w.start_time, mode)===curKey);
+  const accs = workAccounts();
+  if (!S.workAccount || !accs.includes(S.workAccount)) S.workAccount = accs[0];
+  const acc = S.workAccount, isMain = acc === accs[0];
+  const mine = S.workEntries.filter(w => entryAcc(w) === acc);
+
+  const run = runningEntry(); // global – es läuft immer nur eine Uhr
+  const closed = mine.filter(w=>w.end_time);
+  const thisPeriod = mine.filter(w => periodKeyOf(w.start_time, mode)===curKey);
   const workedThis = thisPeriod.reduce((a,w)=>a+workedMinutes(w), 0);
 
-  // Abwesenheiten: Urlaub/Krank/Feiertag zählen als Gutschrift aufs Soll
-  const absAll = getAbsences();
+  // Abwesenheiten: nur beim Hauptjob (zählen als Gutschrift aufs Soll)
+  const absAll = isMain ? getAbsences() : [];
   const absThisList = absAll.filter(a=>periodKeyOf(a.date+"T12:00:00", mode)===curKey)
     .sort((a,b)=> a.date<b.date ? 1 : -1);
   const absCreditThis = absThisList.reduce((a,x)=>a+(x.min||0), 0);
@@ -769,14 +784,18 @@ function renderWork(){
   absAll.forEach(a=>{ const k=periodKeyOf(a.date+"T12:00:00", mode); if(k!==curKey) byPeriod[k]=(byPeriod[k]||0)+(a.min||0); });
   const balance = Object.values(byPeriod).reduce((a,v)=>a+(v-target), 0);
 
-  // Stempeluhr-Anzeige
+  // Konto-Umschalter
+  const accSeg = accs.length>1 ? `<div class="seg" id="w_accseg" style="margin-bottom:10px">${accs.map(a=>
+    `<button data-a="${esc(a)}" class="${a===acc?"active":""}" style="font-size:11.5px;padding:8px 2px">${esc(a.length>16?a.slice(0,15)+"…":a)}</button>`).join("")}</div>` : "";
+
+  // Stempeluhr-Anzeige (die laufende Uhr zeigt ihr Konto)
   let clockHtml;
   if (run){
     const mins = workedMinutes(run);
     const onBreak = !!run.break_started_at;
     clockHtml = `<div class="card clockcard">
       <div class="big">${fmtMin(mins)}</div>
-      <div class="state">${onBreak?"⏸ Pause läuft":"🟢 Eingestempelt"} seit ${fmtTime(new Date(run.start_time))}${run.break_minutes?` · Pausen: ${fmtMin(run.break_minutes)}`:""}</div>
+      <div class="state">${onBreak?"⏸ Pause läuft":"🟢 Eingestempelt"} seit ${fmtTime(new Date(run.start_time))} · <b>${esc(entryAcc(run))}</b>${run.break_minutes?` · Pausen: ${fmtMin(run.break_minutes)}`:""}</div>
       <div class="clockbtns">
         <button class="btn sec" id="w_break">${onBreak?"▶️ Pause beenden":"⏸ Pause"}</button>
         <button class="btn" id="w_out" style="background:var(--red)">⏹ Ausstempeln</button>
@@ -784,7 +803,7 @@ function renderWork(){
   } else {
     clockHtml = `<div class="card clockcard">
       <div class="big">–</div><div class="state">Nicht eingestempelt</div>
-      <div class="clockbtns"><button class="btn" id="w_in" style="background:var(--green);color:#08351d">▶️ Einstempeln</button></div></div>`;
+      <div class="clockbtns"><button class="btn" id="w_in" style="background:var(--green);color:#08351d">▶️ Einstempeln · ${esc(acc.length>20?acc.slice(0,19)+"…":acc)}</button></div></div>`;
   }
 
   // Zielfortschritt (inkl. Abwesenheits-Gutschrift)
@@ -801,16 +820,27 @@ function renderWork(){
       <span>Saldo: <b style="color:${balance>=0?"var(--green)":"var(--red)"}">${balance>=0?"+":""}${fmtMin(balance)}</b></span>
     </div></div>`;
 
-  // Abwesenheiten-Karte für die aktuelle Periode
+  // Nebenkonto: kein Soll – nur Stunden dieser Periode + gesamt
+  const grandTotal = closed.reduce((a,w)=>a+workedMinutes(w),0) + (run && entryAcc(run)===acc ? workedMinutes(run) : 0);
+  const sideHtml = `<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <b>${periodLabel}</b>
+      <b style="color:var(--accent2);font-variant-numeric:tabular-nums;font-size:17px">${fmtMin(workedThis)}</b></div>
+    <div style="display:flex;justify-content:space-between;font-size:12.5px;color:var(--dim);margin-top:4px">
+      <span>Eigenes Zeitkonto · zählt nicht zum Soll</span>
+      <span>Gesamt: <b style="color:var(--text)">${fmtMin(grandTotal)}</b></span></div></div>`;
+  const summaryHtml = isMain ? targetHtml : sideHtml;
+
+  // Abwesenheiten-Karte: eingeklappt, nur Kopf mit Summe (Details auf Tipp)
   const absRow = a => `<div class="wt-entry" style="cursor:default">
     <div><div class="t">${ABS_LABEL[a.kind]||"🏖 Urlaub"} · ${fmtDateShort(new Date(a.date+"T12:00:00"))}</div></div>
     <div style="display:flex;align-items:center;gap:6px"><span class="dur" style="color:var(--green)">+${fmtMin(a.min||0)}</span>
     <button class="abs-del" data-id="${a.id}" style="background:none;border:none;color:var(--dim);font-size:15px;cursor:pointer;padding:2px 6px" aria-label="Abwesenheit löschen">✕</button></div></div>`;
-  const absCardHtml = absThisList.length ? `<div class="card">
-    <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-      <b style="font-size:13.5px">Abwesenheiten · ${periodLabel}</b>
+  const absCardHtml = (isMain && absThisList.length) ? `<div class="card" style="${S.absOpen?"":"padding:11px 14px;"}">
+    <div id="absHead" role="button" tabindex="0" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;gap:8px">
+      <b style="font-size:13.5px">${S.absOpen?"▾":"▸"} 🏖 Abwesenheiten · ${periodLabel} <span style="color:var(--dim2)">${absThisList.length} Tag${absThisList.length>1?"e":""}</span></b>
       <b style="font-size:13.5px;color:var(--green)">+${fmtMin(absCreditThis)}</b></div>
-    ${absThisList.map(absRow).join("")}</div>` : "";
+    ${S.absOpen?`<div style="margin-top:6px;border-top:1px solid var(--line);padding-top:2px">${absThisList.map(absRow).join("")}</div>`:""}</div>` : "";
 
   // Einträge dieser Periode, gruppiert nach Tag
   const groups = {};
@@ -858,18 +888,20 @@ function renderWork(){
         <div style="display:flex;justify-content:space-between;align-items:center">
           <b style="font-size:14px">${open?"▾":"▸"} ${label(k)}</b>
           <span style="font-variant-numeric:tabular-nums;font-size:13.5px"><b>${fmtMin(sum)}</b>
-          <span style="color:${diff>=0?"var(--green)":"var(--red)"};margin-left:8px">${diff>=0?"+":""}${fmtMin(diff)}</span></span>
+          ${isMain?`<span style="color:${diff>=0?"var(--green)":"var(--red)"};margin-left:8px">${diff>=0?"+":""}${fmtMin(diff)}</span>`:""}</span>
         </div>${inner}</div>`;
     }).join("");
   }
 
-  el.innerHTML = clockHtml + targetHtml + absCardHtml +
-    `<div style="display:flex;gap:8px;margin-bottom:4px">
+  el.innerHTML = accSeg + clockHtml + summaryHtml + absCardHtml +
+    (isMain ? `<div style="display:flex;gap:8px;margin-bottom:4px">
       <button class="btn sec" id="w_settings" style="flex:1">⚙️ Sollzeit (${mode==="week"?"Woche":"Monat"})</button>
-      <button class="btn sec" id="w_abs" style="flex:1">🏖 Urlaub eintragen</button></div>` +
+      <button class="btn sec" id="w_abs" style="flex:1">🏖 Urlaub eintragen</button></div>` : "") +
     listHtml + histHtml;
 
-  $("#w_abs").onclick = openAbsenceForm;
+  $$("#w_accseg button", el).forEach(bt=>bt.onclick = ()=>{ S.workAccount = bt.dataset.a; S.wtExpand=null; renderWork(); });
+  const ah = $("#absHead", el); if (ah) ah.onclick = (e)=>{ if (e.target.closest(".abs-del")) return; S.absOpen = !S.absOpen; renderWork(); };
+  const wa = $("#w_abs"); if (wa) wa.onclick = openAbsenceForm;
   $$(".abs-del", el).forEach(b=>armDelete(b, async ()=>{
     await saveAbsences(getAbsences().filter(a=>a.id!==b.dataset.id));
     toast("Gelöscht"); renderWork();
@@ -913,12 +945,13 @@ function renderWork(){
       const open = await serverOpenEntry();
       if (open === undefined) return;
       if (open){ toast("Läuft schon seit "+fmtTime(new Date(open.start_time))+" (anderes Gerät)"); loadAll(); return; }
-      const { error } = await sb.from("work_entries").insert({ start_time:new Date().toISOString() });
-      if (error) return toast("Einstempeln fehlgeschlagen: "+error.message, true);
-      toast("Eingestempelt – viel Erfolg!"); loadAll();
+      const { error } = await sb.from("work_entries").insert({ start_time:new Date().toISOString(),
+        account: isMain ? null : acc });
+      if (error) return toast("Einstempeln fehlgeschlagen: "+error.message+(String(error.message).includes("account")?" – bitte update-arbeit.sql in Supabase ausführen!":""), true);
+      toast(`Eingestempelt (${acc}) – viel Erfolg!`); loadAll();
     };
   }
-  $("#w_settings").onclick = openWorkSettings;
+  const ws = $("#w_settings"); if (ws) ws.onclick = openWorkSettings;
   $$(".wt-entry", el).forEach(r=>r.onclick=()=>{
     const w = S.workEntries.find(x=>x.id===r.dataset.id);
     if (w && w.end_time) openWorkEntryForm(w);
@@ -936,6 +969,8 @@ function openWorkEntryForm(w){
     <label>Beginn</label><input type="datetime-local" id="we_start" value="${dt(st)}">
     <label>Ende</label><input type="datetime-local" id="we_end" value="${dt(en)}">
     <label>Pausen (Minuten)</label><input type="number" min="0" id="we_break" value="${w?w.break_minutes:0}">
+    <label>Zeitkonto</label><select id="we_acc">${workAccounts().map(a=>
+      `<option value="${esc(a)}" ${(w ? entryAcc(w) : (S.workAccount||workAccounts()[0]))===a?"selected":""}>${esc(a)}</option>`).join("")}</select>
     <label>Notiz</label><input id="we_notes" value="${esc(w?w.notes:"")}" placeholder="optional">
     <div style="height:18px"></div>
     <button class="btn" id="we_save">Speichern</button>
@@ -944,8 +979,10 @@ function openWorkEntryForm(w){
   $("#we_save").onclick = async ()=>{
     const start = new Date($("#we_start").value), end = new Date($("#we_end").value);
     if (!(start<end)) return toast("Ende muss nach Beginn liegen.", true);
+    const selAcc = $("#we_acc").value;
     const row = { start_time:start.toISOString(), end_time:end.toISOString(),
-      break_minutes:Math.max(0,+$("#we_break").value||0), notes:$("#we_notes").value };
+      break_minutes:Math.max(0,+$("#we_break").value||0), notes:$("#we_notes").value,
+      account: selAcc === workAccounts()[0] ? null : selAcc };
     const q = isNew ? sb.from("work_entries").insert(row) : sb.from("work_entries").update(row).eq("id",w.id);
     const { error } = await q;
     if (error) return toast("Fehler: "+error.message, true);
@@ -1584,9 +1621,13 @@ function homeGroupedPlan(openPlan, planRow){
         <span style="font-size:11.5px;color:var(--dim2);font-weight:700">${g.arr.length}</span>
         ${dueN&&!isOpen?`<span style="font-size:10.5px;font-weight:800;color:var(--amber)">${dueN} fällig</span>`:""}
         <span style="margin-left:auto"></span>
+        ${g.name!=="Sonstiges"?`<button class="catplus" data-cat="${esc(g.name)}" aria-label="Aufgabe in ${esc(g.name)} anlegen"
+          style="background:var(--card2);border:1px solid var(--line);color:var(--accent2);width:26px;height:26px;border-radius:8px;font-size:16px;font-weight:800;cursor:pointer;line-height:1;flex-shrink:0">＋</button>`:""}
       </div>
       ${isOpen ? g.arr.slice(0,PER_CAT).map(p=>planRow(p, g.name!=="Sonstiges")).join("")
         + (g.arr.length>PER_CAT?`<div style="text-align:center;padding-top:6px"><a class="homeMoreCat" data-loc="${esc(g.name)}" style="color:var(--accent2);font-size:12px;font-weight:700;cursor:pointer">＋ ${g.arr.length-PER_CAT} weitere ›</a></div>`:"") : ""}
+      ${isOpen && g.name!=="Sonstiges" ? `<input class="cat-add-in" data-loc="${esc(g.name)}" placeholder="＋ Neue Aufgabe…" autocomplete="off" enterkeyhint="done"
+        style="margin-top:8px;background:transparent;border:none;border-top:1px dashed var(--line);border-radius:0;padding:8px 2px 2px;font-size:13.5px">` : ""}
     </div>`;
   }).join("");
 }
@@ -1721,6 +1762,33 @@ async function renderHome(){
     setHomeCatState(name, !cur);
     renderHome();
   });
+  // ＋ am Karten-Kopf: Karte öffnen und direkt ins Eingabefeld springen
+  $$(".catplus", el).forEach(bt=>bt.onclick = (e)=>{
+    e.stopPropagation();
+    setHomeCatState(bt.dataset.cat, true);
+    S._focusCatAdd = bt.dataset.cat;
+    renderHome();
+  });
+  // Schnell-Anlegen direkt in der Kategorie
+  $$(".cat-add-in", el).forEach(inp=>{
+    inp.addEventListener("keydown", async e=>{
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      const title = inp.value.trim(); if (!title) return;
+      inp.value = "";
+      const loc = inp.dataset.loc;
+      const { error } = await sb.from("tasks").insert({ title, duration_minutes:15, location:loc, kind:"oneOff" });
+      if (error) return toast("Anlegen fehlgeschlagen: "+error.message, true);
+      toast(`✓ „${title}" → ${loc}`);
+      S._focusCatAdd = loc; // nach dem Neu-Rendern wieder fokussieren (mehrere nacheinander)
+      loadAll();
+    });
+  });
+  if (S._focusCatAdd){
+    const fi = $(`.cat-add-in[data-loc="${CSS.escape(S._focusCatAdd)}"]`, el);
+    S._focusCatAdd = null;
+    if (fi) fi.focus();
+  }
   $$(".homeMoreCat", el).forEach(a=>a.onclick = ()=>{
     S.locFilter = S.locations.some(l=>l.name===a.dataset.loc) ? a.dataset.loc : "ALLE";
     switchTab("tasks");
@@ -2034,11 +2102,12 @@ const AI_TOOLS = [
       notes:{type:"string"},
     }, required:["title"] } } },
   { type:"function", function:{ name:"add_work_entry",
-    description:"Arbeitszeit-Eintrag nachtragen",
+    description:"Arbeitszeit-Eintrag nachtragen. Ohne account = Hauptjob (Fleischmann); Nebenkonten (Mozarteumorchester, Hipper Machines) haben ein eigenes Zeitkonto ohne Soll.",
     parameters:{ type:"object", properties:{
       date:{type:"string",description:"YYYY-MM-DD"},
       start:{type:"string",description:"HH:MM"}, end:{type:"string",description:"HH:MM"},
       break_minutes:{type:"integer"}, notes:{type:"string"},
+      account:{type:"string",description:"Zeitkonto, z.B. Mozarteumorchester oder Hipper Machines – weglassen für den Hauptjob"},
     }, required:["date","start","end"] } } },
   { type:"function", function:{ name:"add_absence",
     description:"Urlaub, Krankstand oder Feiertag eintragen – Werktage zählen als Soll-Gutschrift bei der Arbeitszeit",
@@ -2061,17 +2130,22 @@ function workStatsSummary(){
   const mode = getSetting("workTargetMode","month");
   const target = mode==="week" ? getSetting("weeklyTargetMinutes",2310) : getSetting("monthlyTargetMinutes",4800);
   const curKey = periodKeyOf(new Date(), mode);
+  const accs = workAccounts();
+  const mainE = S.workEntries.filter(w=>entryAcc(w)===accs[0]); // Soll/Saldo nur für den Hauptjob
   const absAll = getAbsences();
-  const workedThis = S.workEntries.filter(w=>periodKeyOf(w.start_time,mode)===curKey).reduce((a,w)=>a+workedMinutes(w),0);
+  const workedThis = mainE.filter(w=>periodKeyOf(w.start_time,mode)===curKey).reduce((a,w)=>a+workedMinutes(w),0);
   const absThis = absAll.filter(a=>periodKeyOf(a.date+"T12:00:00",mode)===curKey).reduce((a,x)=>a+(x.min||0),0);
   const byPeriod = {};
-  S.workEntries.filter(w=>w.end_time).forEach(w=>{ const k=periodKeyOf(w.start_time,mode); if(k!==curKey) byPeriod[k]=(byPeriod[k]||0)+workedMinutes(w); });
+  mainE.filter(w=>w.end_time).forEach(w=>{ const k=periodKeyOf(w.start_time,mode); if(k!==curKey) byPeriod[k]=(byPeriod[k]||0)+workedMinutes(w); });
   absAll.forEach(a=>{ const k=periodKeyOf(a.date+"T12:00:00",mode); if(k!==curKey) byPeriod[k]=(byPeriod[k]||0)+(a.min||0); });
   const balance = Object.values(byPeriod).reduce((a,v)=>a+(v-target),0);
-  const todayMin = S.workEntries.filter(w=>isToday(w.start_time)).reduce((a,w)=>a+workedMinutes(w),0);
+  const todayMin = mainE.filter(w=>isToday(w.start_time)).reduce((a,w)=>a+workedMinutes(w),0);
   const wkKey = periodKeyOf(new Date(),"week");
-  const weekMin = S.workEntries.filter(w=>periodKeyOf(w.start_time,"week")===wkKey).reduce((a,w)=>a+workedMinutes(w),0);
-  return { mode, target, workedThis, absThis, balance, todayMin, weekMin };
+  const weekMin = mainE.filter(w=>periodKeyOf(w.start_time,"week")===wkKey).reduce((a,w)=>a+workedMinutes(w),0);
+  const mKey = periodKeyOf(new Date(),"month");
+  const sides = accs.slice(1).map(a=>({ name:a,
+    month: S.workEntries.filter(w=>entryAcc(w)===a && periodKeyOf(w.start_time,"month")===mKey).reduce((s,w)=>s+workedMinutes(w),0) }));
+  return { mode, target, workedThis, absThis, balance, todayMin, weekMin, main:accs[0], sides };
 }
 
 function aiContext(){
@@ -2093,7 +2167,8 @@ function aiContext(){
   const li = levelInfo();
   const upAbs = getAbsences().filter(a=>a.date>=dk).sort((a,b)=>a.date<b.date?-1:1).slice(0,14);
   const dataBlock = `LIVE-DATEN (für Auskünfte – nutze diese Zahlen, rate nie):
-- Arbeitszeit heute: ${fmtMin(ws.todayMin)}${runE?` (läuft gerade seit ${fmtTime(new Date(runE.start_time))})`:""} · diese Woche: ${fmtMin(ws.weekMin)}
+- Arbeitszeit ${ws.main} heute: ${fmtMin(ws.todayMin)}${runE?` (läuft gerade seit ${fmtTime(new Date(runE.start_time))} auf Konto ${entryAcc(runE)})`:""} · diese Woche: ${fmtMin(ws.weekMin)}
+- Nebenkonten diesen Monat: ${ws.sides.map(s=>`${s.name} ${fmtMin(s.month)}`).join(" · ")||"keine"}
 - ${ws.mode==="week"?"Wochen":"Monats"}-Soll: ${fmtMin(ws.target)} · aktuelle Periode: ${fmtMin(ws.workedThis+ws.absThis)}${ws.absThis?` (davon Urlaub/Abwesenheit ${fmtMin(ws.absThis)})`:""} · Überstunden-Saldo: ${ws.balance>=0?"+":""}${fmtMin(ws.balance)}
 - Heute erledigt: ${doneToday.length} Aufgabe(n) (${fmtMin(doneToday.reduce((a,c)=>a+(c.minutes||0),0))})${doneToday.length?": "+doneToday.slice(0,8).map(c=>c.title).join(", "):""}
 - Streak: ${stk} Tag(e) · Level ${li.level} · ${li.xp.toLocaleString("de-DE")} XP
@@ -2205,10 +2280,15 @@ async function aiExecTool(name, args){
     }
     if (name==="add_work_entry"){
       const st = new Date(`${args.date}T${args.start}:00`), en = new Date(`${args.date}T${args.end}:00`);
+      let accV = null;
+      if (args.account){
+        const m = workAccounts().find(a=>a.toLowerCase().includes(String(args.account).toLowerCase()));
+        if (m && m !== workAccounts()[0]) accV = m;
+      }
       const { error } = await sb.from("work_entries").insert({ start_time:st.toISOString(), end_time:en.toISOString(),
-        break_minutes:args.break_minutes||0, notes:args.notes||"" });
+        break_minutes:args.break_minutes||0, notes:args.notes||"", account: accV });
       if (error) throw error;
-      return { ok:true, info:`Arbeitszeit ${args.date} ${args.start}–${args.end} eingetragen` };
+      return { ok:true, info:`Arbeitszeit ${args.date} ${args.start}–${args.end} eingetragen (${accV||workAccounts()[0]})` };
     }
     if (name==="add_absence"){
       const from = args.start_date, to = args.end_date || args.start_date;
