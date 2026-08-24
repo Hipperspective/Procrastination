@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 38; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 40; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -1594,6 +1594,7 @@ function homeGroupedPlan(openPlan, planRow){
 async function renderHome(){
   const el = $("#view-home");
   if (!el || S.tab!=="home") return;
+  purgeDoneNotes(); // abgehakte Notizen vom letzten Mal verschwinden jetzt
 
   // Streak (gleiche Logik wie Statistik)
   const byDay = {};
@@ -1898,6 +1899,21 @@ function renderPlan(){
   });
 }
 
+// Mehrtägige Blöcke (z.B. Flug Mi 17:45 → Do 15:00) in Tages-Blöcke aufteilen
+function splitBlockRows(base, startDate, endDate, startMin, endMin){
+  if (!endDate || endDate <= startDate)
+    return [{ ...base, date:startDate, start_min:startMin, end_min:endMin }];
+  const rows = [{ ...base, date:startDate, start_min:startMin, end_min:1439 }];
+  const d = new Date(startDate+"T12:00:00");
+  for (let i=0; i<14; i++){
+    d.setDate(d.getDate()+1);
+    const k = dayKey(d);
+    if (k < endDate){ rows.push({ ...base, date:k, start_min:0, end_min:1439 }); } // Zwischentage = ganztägig
+    else { rows.push({ ...base, date:k, start_min:0, end_min:endMin }); break; }   // Ankunftstag bis Endzeit
+  }
+  return rows;
+}
+
 function openBlockForm(b){
   const isNew = !b;
   b = b || { date:S.planDate||dayKey(new Date()), type:"event", start_min:540, end_min:600, title:"", notes:"", color:"" };
@@ -1917,6 +1933,8 @@ function openBlockForm(b){
       <div><label>Von</label><input type="time" id="b_start" value="${minToHM(b.start_min)}"></div>
       <div><label>Bis</label><input type="time" id="b_end" value="${minToHM(b.end_min)}"></div>
     </div>
+    <label>Endet an anderem Tag? (z.B. Nachtflug)</label>
+    <input type="date" id="b_dateEnd" value="${b.date}">
     <label>Eigene Farbe (optional)</label>
     <div style="display:flex;gap:7px;flex-wrap:wrap;padding:4px 0">${colorBtns}</div>
     <label>Notiz</label><input id="b_notes" value="${esc(b.notes)}">
@@ -1937,6 +1955,22 @@ function openBlockForm(b){
       start_min: hmToMin($("#b_start").value||"09:00"), end_min: hmToMin($("#b_end").value||"10:00"),
     };
     if (!row.date) return toast("Bitte Datum wählen.", true);
+    const endDate = $("#b_dateEnd").value || row.date;
+    if (endDate < row.date) return toast("Ende-Datum liegt vor dem Beginn.", true);
+    if (endDate > row.date){
+      // Mehrtägig: in Tages-Blöcke aufteilen (Tag 1 bis Mitternacht, Ankunftstag ab 00:00)
+      const rows = splitBlockRows({ title:row.title, type:row.type, notes:row.notes, color:row.color },
+        row.date, endDate, row.start_min, row.end_min);
+      let error = null;
+      if (isNew) ({ error } = await sb.from("time_blocks").insert(rows));
+      else {
+        ({ error } = await sb.from("time_blocks").update(rows[0]).eq("id", b.id));
+        if (!error) ({ error } = await sb.from("time_blocks").insert(rows.slice(1)));
+      }
+      if (error) return toast("Fehler: "+error.message, true);
+      S.planDate = row.date; closeModal();
+      toast(`Über ${rows.length} Tage angelegt ✓`); loadAll(); return;
+    }
     if (row.end_min <= row.start_min && row.type!=="sleep") return toast("Ende muss nach Beginn liegen.", true);
     const q = isNew ? sb.from("time_blocks").insert(row) : sb.from("time_blocks").update(row).eq("id", b.id);
     const { error } = await q;
@@ -1973,6 +2007,7 @@ const AI_TOOLS = [
     description:"Termin/Zeitblock im Kalender anlegen. Ohne start/end = ganztägiger Termin.",
     parameters:{ type:"object", properties:{
       date:{type:"string",description:"YYYY-MM-DD"},
+      end_date:{type:"string",description:"YYYY-MM-DD – NUR wenn der Termin an einem anderen Tag endet (Nachtflug, mehrtägige Reise)"},
       title:{type:"string"},
       start:{type:"string",description:"HH:MM, weglassen für ganztägig"}, end:{type:"string",description:"HH:MM, weglassen für ganztägig"},
       type:{type:"string",enum:["work","home","travel","event","routine","free","sleep"],description:"Standard: event"},
@@ -2073,6 +2108,7 @@ ERINNERUNGEN ("erinnere mich am X um Y an Z"): create_task mit scheduled_date + 
 KORREKTUREN: Wenn sich eine Nachricht auf einen gerade angelegten/besprochenen Eintrag bezieht ("bis 23 Uhr", "doch ohne Uhrzeit", "verschieb auf Montag"), IMMER update_appointment/update_task verwenden – NIE einen zweiten Eintrag anlegen.
 Termin ohne Uhrzeit ("nur Hinweis, dass er kommt"): create_appointment OHNE start/end -> ganztägig.
 REISEN ("Freitag Flug nach Wien 14 Uhr", "Montag mit dem Zug nach Salzburg"): create_appointment mit type=travel und Titel mit Verkehrsmittel + Ziel, z.B. "Flug nach Wien" oder "Zug Salzburg → Wien". Das Ziel steuert dann automatisch Wetter-Woche und 📍-Anzeige.
+Endet eine Reise an einem ANDEREN Tag (Nachtflug: "Mittwoch 17:45 Abflug, Ankunft Donnerstag 15:00"): zusätzlich end_date setzen – start=Abflugzeit, end=Ankunftszeit (Ortszeit).
 URLAUB/KRANK ("ich bin nächste Woche auf Urlaub", "war gestern krank"): add_absence – Werktage zählen automatisch als Arbeitszeit-Gutschrift.
 Verfügbare Orte/Listen: ${S.locations.map(l=>l.name).join(", ")}. Wenn kein Ort passt, nimm "To-Do".
 Antworte kurz, freundlich, auf Deutsch. Fasse nach Tool-Aufrufen knapp zusammen, was du angelegt hast.
@@ -2110,6 +2146,14 @@ async function aiExecTool(name, args){
     }
     if (name==="create_appointment"){
       const allDay = !args.start && !args.end;
+      if (!allDay && args.end_date && args.end_date > args.date){
+        // Mehrtägig (Nachtflug etc.): in Tages-Blöcke aufteilen
+        const rows = splitBlockRows({ title:args.title, type:args.type||"event", notes:args.notes||"", color:"" },
+          args.date, args.end_date, hm(args.start), hm(args.end||args.start));
+        const { error } = await sb.from("time_blocks").insert(rows);
+        if (error) throw error;
+        return { ok:true, info:`"${args.title}": ${args.date} ${minToHM(hm(args.start))} bis ${args.end_date} ${minToHM(hm(args.end||args.start))} angelegt` };
+      }
       const row = { date:args.date, title:args.title, type:args.type||"event",
         start_min: allDay ? 0 : hm(args.start), end_min: allDay ? 1439 : hm(args.end||args.start),
         notes:args.notes||"", color:"" };
@@ -2972,6 +3016,16 @@ function getNotes(){
   return list;
 }
 async function saveNotes(list){ await saveSetting("homeNotesList", list); }
+
+// Abgehakte Notizen beim nächsten Seiten-Laden endgültig entfernen
+let _notesPurged = false;
+function purgeDoneNotes(){
+  if (_notesPurged || !S.settings) return;
+  _notesPurged = true;
+  const list = getNotes();
+  const keep = list.filter(n=>!n.done);
+  if (keep.length !== list.length) saveNotes(keep);
+}
 
 function postitHtml(){
   const notes = getNotes();
