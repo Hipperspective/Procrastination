@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 42; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 43; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -1608,6 +1608,9 @@ function homeGroupedPlan(openPlan, planRow){
   });
   const rest = openPlan.filter(p=>!S.locations.some(l=>!l.is_routine && l.name===(p.t.location||"")));
   if (rest.length) groups.push({ name:"Sonstiges", color:"#7e88a0", arr:rest });
+  // "Home" ganz ans Ende – Arbeit & Projekte zuerst
+  const grank = g => g.name==="Home" ? 3 : g.name==="Sonstiges" ? 2 : 1;
+  groups.sort((a,b)=>grank(a)-grank(b));
   const st = homeCatState();
   return groups.map(g=>{
     const hasUrgent = g.arr.some(p=>p.due || p.time);
