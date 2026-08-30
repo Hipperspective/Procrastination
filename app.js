@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 44; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 46; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -1227,10 +1227,14 @@ function openSettings(){
     <label>🔔 Benachrichtigungen</label>
     <div class="card" style="margin-top:4px" id="s_notifyBox">wird geladen…</div>
     <label>Daten</label>
-    <button class="btn sec" id="s_import">📥 iOS-Backup importieren (.json)</button>
+    <button class="btn sec" id="s_export">📤 Backup exportieren (.json)</button>
+    <div style="height:8px"></div>
+    <button class="btn sec" id="s_import">📥 Backup importieren (.json)</button>
     <input type="file" id="s_importfile" accept=".json,application/json" class="hidden">
     <div style="height:8px"></div>
     <button class="btn sec" id="s_archive">🗂 Archiv öffnen</button>
+    <div style="height:8px"></div>
+    <button class="btn sec" id="s_meds">💊 Medikamente verwalten</button>
     <label>💬 Assistent – OpenAI API-Key (bleibt nur auf diesem Gerät)</label>
     <input type="password" id="s_aikey" placeholder="sk-…" value="${esc(localStorage.getItem("wopAiKey")||"")}">
     <div style="height:8px"></div>
@@ -1240,6 +1244,8 @@ function openSettings(){
     <button class="btn danger" id="s_logout">Abmelden</button>
   `);
   renderNotifySettings();
+  $("#s_export").onclick = exportBackup;
+  $("#s_meds").onclick = openMedsForm;
   $("#s_import").onclick = ()=>$("#s_importfile").click();
   $("#s_importfile").onchange = async (e)=>{
     const file = e.target.files[0]; if(!file) return;
@@ -1360,7 +1366,41 @@ function mapBackup(json){
   return { locations, tasks, work_entries, settings, time_blocks };
 }
 
+// 📤 Eigenes Backup: alles als JSON herunterladen (Gegenstück: importBackup versteht es wieder)
+function exportBackup(){
+  const data = {
+    webBackup: true, version: 1, exportDate: new Date().toISOString(),
+    tasks: S.tasks, locations: S.locations, completions: S.completions,
+    workEntries: S.workEntries, timeBlocks: S.timeBlocks, settings: S.settings,
+  };
+  const blob = new Blob([JSON.stringify(data, null, 1)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "procrastination-backup-" + dayKey(new Date()) + ".json";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+  toast("📤 Backup heruntergeladen");
+}
+
 async function importBackup(json){
+  // Eigenes Web-Backup? Dann 1:1 wiederherstellen (upsert nach id, nichts wird doppelt)
+  if (json && json.webBackup){
+    toast("Stelle Backup wieder her…");
+    const strip = r => { const { user_id, ...rest } = r; return { ...rest, user_id: S.user.id }; };
+    const tables = [["locations", json.locations], ["tasks", json.tasks], ["completions", json.completions],
+      ["work_entries", json.workEntries], ["time_blocks", json.timeBlocks]];
+    for (const [table, rows] of tables){
+      if (!rows || !rows.length) continue;
+      for (let i=0; i<rows.length; i+=200){
+        const { error } = await sb.from(table).upsert(rows.slice(i, i+200).map(strip));
+        if (error) return toast(`Import ${table} fehlgeschlagen: ${error.message}`, true);
+      }
+    }
+    if (json.settings) for (const [k,v] of Object.entries(json.settings)) await saveSetting(k, v);
+    toast("✅ Backup wiederhergestellt");
+    closeModal(); loadAll();
+    return;
+  }
   const m = mapBackup(json);
   toast("Importiere…");
 
@@ -1602,7 +1642,9 @@ function calTileHtml(){
 }
 
 const routineLocations = () => S.locations.filter(l=>l.is_routine);
-const isRoutineTask = t => routineLocations().some(l=>l.name.toLowerCase()===(t.location||"").toLowerCase());
+// Skincare zählt immer als Routine (steckt in Morgen-/Abendroutine), auch ohne Routine-Flag
+const isRoutineTask = t => routineLocations().some(l=>l.name.toLowerCase()===(t.location||"").toLowerCase())
+  || isSkincareLoc(t.location||"");
 
 function homePlanItems(){
   // Heutiger Plan: geplante Aufgaben (mit/ohne Uhrzeit), Fällige, Prioritäten
@@ -1619,7 +1661,9 @@ function homePlanItems(){
     } else if (done){
       items.push({ t, done:true, time:null, sort: 5000 });
     } else {
-      // offen, aber (noch) nicht fällig – trotzdem sichtbar, damit nichts verloren geht
+      // offen, aber (noch) nicht fällig – Einmaliges bleibt sichtbar, damit nichts verloren geht.
+      // Wiederkehrendes (Chores) taucht erst wieder auf, wenn es laut Rhythmus dran ist.
+      if (t.kind === "recurring") return;
       items.push({ t, done:false, time:null, sort: 3000 - (t.is_priority?400:0) - overdueDays(t) });
     }
   });
@@ -1779,12 +1823,14 @@ async function renderHome(){
     </div>
     </div>
     <div class="home-side">
+      <div class="m-sec m-meds">${medsCardHtml()}</div>
       <div class="m-sec m-todo">${todoPanelHtml()}</div>
       <div class="m-sec m-post">${postitHtml()}</div>
       <div class="m-sec m-chat">${homeChatHtml()}</div>
     </div>
   `;
   wireHomeChat(el);
+  wireMeds(el);
   wireTodoPanel(el);
   wirePostit(el);
   fillWeekWeather();
@@ -2470,13 +2516,14 @@ function routineTasksFor(name){
   return open.concat(done);
 }
 
-// Skincare steckt in der Abendroutine (kein eigenes Kärtchen)
+// Skincare steckt in Morgen- UND Abendroutine (kein eigenes Kärtchen)
 const isSkincareLoc = name => /skincare|pflege/i.test(name);
 function mergedRoutineTasks(name){
   let ts = routineTasksFor(name);
-  if (/evening|abend/i.test(name)){
-    S.locations.filter(l=>l.is_routine && isSkincareLoc(l.name))
-      .forEach(l=>{ ts = ts.concat(routineTasksFor(l.name)); });
+  if (/evening|abend|morning|morgen/i.test(name)){
+    // Alle Skincare-Aufgaben dazu – egal ob der Ort ein Routine-Flag hat oder nicht
+    const skinc = S.tasks.filter(t=>!t.is_archived && isActiveWeekday(t) && isSkincareLoc(t.location||""));
+    skinc.forEach(t=>{ if (!ts.some(x=>x.id===t.id)) ts.push(t); });
     ts = ts.filter(t=>!isCompletedToday(t)).concat(ts.filter(isCompletedToday));
   }
   return ts;
@@ -2838,6 +2885,81 @@ function openPlanTomorrow(){
 // ============================================================
 // ☑️ To-Do-Panel am Heute-Screen (rechts auf Mac/iPad, unten am iPhone)
 // ============================================================
+// ============================================================
+// 💊 Medikamente: Zeile erscheint ab der eingestellten Uhrzeit, verschwindet nach dem Abhaken
+// ============================================================
+function getMeds(){ const m = getSetting("meds", []); return Array.isArray(m) ? m : []; }
+function medsLog(){ const l = getSetting("medsLog", {}); return l && typeof l === "object" ? l : {}; }
+async function logMedTaken(id){
+  const l = medsLog(), k = dayKey(new Date());
+  const cur = new Set(l[k] || []); cur.add(id);
+  const pruned = {};
+  Object.keys(l).sort().slice(-7).forEach(x=>pruned[x]=l[x]); // alte Tage aufräumen
+  pruned[k] = [...cur];
+  await saveSetting("medsLog", pruned);
+}
+function medsCardHtml(){
+  const meds = getMeds(); if (!meds.length) return "";
+  const taken = new Set(medsLog()[dayKey(new Date())] || []);
+  const nowM = new Date().getHours()*60 + new Date().getMinutes();
+  const hm2 = v => { const [a,b] = String(v||"0:0").split(":").map(Number); return a*60+(b||0); };
+  const due = meds.filter(m=>!taken.has(m.id) && nowM >= hm2(m.time))
+    .sort((a,b)=>hm2(a.time)-hm2(b.time));
+  if (!due.length) return ""; // alles genommen bzw. noch nicht so weit → Karte weg
+  return `<div class="card" id="medsCard" style="border-left:4px solid var(--red)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <b style="font-size:13.5px">💊 Medikamente</b>
+      <button id="medsGear" class="iconbtn" style="padding:2px 6px;font-size:13px" aria-label="Medikamente verwalten">⚙️</button>
+    </div>
+    ${due.map(m=>`<div class="todorow" style="padding:7px 0">
+      <button class="chk medchk" data-med="${esc(m.id)}" style="width:24px;height:24px;min-width:24px;margin:0;font-size:12px" aria-label="Genommen">✓</button>
+      <span class="tt">${esc(m.name)}</span>
+      <span style="font-size:11.5px;color:var(--dim2);font-variant-numeric:tabular-nums">${esc(m.time||"")}</span>
+    </div>`).join("")}
+  </div>`;
+}
+function wireMeds(root){
+  const card = $("#medsCard", root); if (!card) return;
+  $$(".medchk", card).forEach(b=>b.onclick = async (e)=>{
+    celebrate(e.currentTarget);
+    await logMedTaken(b.dataset.med);
+    toast("💊 Genommen ✓");
+    setTimeout(renderHome, 450);
+  });
+  $("#medsGear", card).onclick = openMedsForm;
+}
+function openMedsForm(){
+  const meds = getMeds();
+  const row = m => `<div class="mrow" data-mid="${esc(m.id)}" style="align-items:center">
+    <div><input class="med-name" value="${esc(m.name)}" placeholder="z.B. Vitamin D"></div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <input type="time" class="med-time" value="${esc(m.time||"08:00")}">
+      <button class="iconbtn med-del" aria-label="Löschen">🗑</button>
+    </div></div>`;
+  openModal(`
+    <h3>💊 Medikamente</h3>
+    <div style="font-size:12.5px;color:var(--dim);margin-bottom:8px">Jede Zeile taucht am Homescreen ab ihrer Uhrzeit auf und verschwindet nach dem Abhaken bis zum nächsten Tag.</div>
+    <div id="medList">${meds.map(row).join("") || ""}</div>
+    <button class="btn sec" id="med_add">＋ Medikament hinzufügen</button>
+    <div style="height:12px"></div>
+    <button class="btn" id="med_save">Speichern</button>
+  `);
+  const wireDel = ()=>$$("#medList .med-del").forEach(b=>b.onclick = ()=>b.closest(".mrow").remove());
+  wireDel();
+  $("#med_add").onclick = ()=>{
+    $("#medList").insertAdjacentHTML("beforeend", row({ id: uid(), name:"", time:"08:00" }));
+    wireDel();
+    const inputs = $$("#medList .med-name"); inputs[inputs.length-1].focus();
+  };
+  $("#med_save").onclick = async ()=>{
+    const list = $$("#medList .mrow").map(r=>({
+      id: r.dataset.mid, name: $(".med-name", r).value.trim(), time: $(".med-time", r).value || "08:00",
+    })).filter(m=>m.name);
+    await saveSetting("meds", list);
+    closeModal(); toast("Gespeichert"); renderHome();
+  };
+}
+
 function todoLocationName(){
   const l = S.locations.find(x=>!x.is_routine && x.name.toLowerCase()==="to-do")
     || S.locations.find(x=>!x.is_routine && x.name.toLowerCase().includes("to"))
@@ -2868,6 +2990,20 @@ function todoPanelHtml(){
       <button id="todoQuickAdd" aria-label="Hinzufügen">+</button>
     </div>
     ${open.map(row).join("") || `<div class="section-empty" style="padding:8px 0">Alles leer – nice! ✨</div>`}
+    ${(()=>{
+      // ⏳ Liegt schon lange: Aufgaben aus anderen Kategorien, die seit ≥14 Tagen offen sind
+      const age = t => Math.floor((Date.now() - new Date(t.last_done_at || t.created_at || Date.now()))/86400000);
+      const stale = S.tasks.filter(t=>!t.is_archived && !isCompletedToday(t) && startReached(t)
+          && (t.location||"")!==locName && !isRoutineTask(t) && t.kind!=="recurring" && age(t)>=14)
+        .sort((a,b)=>age(b)-age(a)).slice(0,5);
+      return stale.length ? `<div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--line)">
+        <div style="font-size:10.5px;font-weight:800;color:var(--amber);letter-spacing:.05em;text-transform:uppercase;margin-bottom:4px">⏳ Liegt schon lange</div>
+        ${stale.map(t=>`<div class="todorow" data-id="${t.id}">
+          <button class="chk" style="width:24px;height:24px;min-width:24px;margin:0;font-size:12px" aria-label="Erledigt">✓</button>
+          <span class="tt" role="button" tabindex="0">${esc(t.title)}</span>
+          <span style="font-size:10.5px;color:var(--dim2);white-space:nowrap">${age(t)} T · ${esc((t.location||"").slice(0,14))}</span>
+        </div>`).join("")}</div>` : "";
+    })()}
     ${done.length?`<div style="margin-top:6px;opacity:.55">${done.slice(0,5).map(row).join("")}</div>`:""}
   </div>`;
 }
