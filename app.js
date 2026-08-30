@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 49; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 50; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -1825,9 +1825,9 @@ async function renderHome(){
     <div class="home-side">
       <div class="m-sec m-pomo">${pomoWidgetHtml()}</div>
       <div class="m-sec m-meds">${medsCardHtml()}</div>
+      <div class="m-sec m-chat">${homeChatHtml()}</div>
       <div class="m-sec m-todo">${todoPanelHtml()}</div>
       <div class="m-sec m-post">${postitHtml()}</div>
-      <div class="m-sec m-chat">${homeChatHtml()}</div>
     </div>
   `;
   wireHomeChat(el);
@@ -2891,8 +2891,11 @@ function openPlanTomorrow(){
 // 🍅 Pomodoro-Widget am Home (25/5): Extra-XP pro geschaffter Runde + Tageszähler
 // ============================================================
 let _pomoTick = null;
-const getPomoW = () => { try { return JSON.parse(localStorage.getItem("wopPomo")||"null"); } catch(e){ return null; } };
-const setPomoW = p => p ? localStorage.setItem("wopPomo", JSON.stringify(p)) : localStorage.removeItem("wopPomo");
+// Läuft synchron über alle Geräte (settings "pomoRun" statt localStorage)
+const deviceId = (()=>{ let d = localStorage.getItem("wopDeviceId");
+  if (!d){ d = uid(); localStorage.setItem("wopDeviceId", d); } return d; })();
+const getPomoW = () => getSetting("pomoRun", null);
+const setPomoW = p => { S.settings.pomoRun = p; saveSetting("pomoRun", p); };
 function pomoTodayCount(){ const l = getSetting("pomoLog", {}); return (l && l[dayKey(new Date())]) || 0; }
 async function awardPomodoro(){
   const l = getSetting("pomoLog", {}) || {}, k = dayKey(new Date());
@@ -2930,7 +2933,7 @@ function wirePomoWidget(root){
   clearInterval(_pomoTick); _pomoTick = null;
   const card = $("#pomoCard", root); if (!card) return;
   const st = $("#pomoStart", card);
-  if (st) st.onclick = ()=>{ setPomoW({ phase:"work", start:Date.now() }); renderHome(); };
+  if (st) st.onclick = ()=>{ setPomoW({ phase:"work", start:Date.now(), by:deviceId }); renderHome(); };
   const sp = $("#pomoStop", card);
   if (sp) sp.onclick = ()=>{ setPomoW(null); renderHome(); };
   const p = getPomoW();
@@ -2942,10 +2945,14 @@ function wirePomoWidget(root){
     const tEl = document.getElementById("pomoTime");
     if (tEl) tEl.textContent = `${pad(Math.floor(left/60))}:${pad(left%60)}`;
     if (left > 0) return;
+    // Übergang macht das Gerät, das gestartet hat (sonst doppelte XP von mehreren Geräten).
+    // Fallback: ist das Startgerät weg, übernimmt jedes andere nach 60s.
+    const owner = !cur.by || cur.by === deviceId;
+    if (!owner && left > -60) return;
     clearInterval(_pomoTick); _pomoTick = null;
     if (cur.phase === "work"){
       await awardPomodoro();               // Runde voll → Zähler + Extra-XP
-      setPomoW({ phase:"break", start:Date.now() });
+      setPomoW({ phase:"break", start:Date.now(), by:cur.by||deviceId });
     } else {
       setPomoW(null);
       toast("☕️ Pause vorbei – bereit für die nächste Runde!");
