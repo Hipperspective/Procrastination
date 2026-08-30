@@ -251,7 +251,7 @@ h2{font-size:15px;margin:22px 0 10px;color:var(--dim);font-weight:700;text-trans
 .wk-hline{position:absolute;left:0;right:0;border-top:1px solid rgba(127,136,160,.12);pointer-events:none;}
 
 /* Aufgaben: Kategorien als Spalten auf breiten Screens */
-@media(min-width:1000px){
+@media(min-width:700px){
   #view-tasks .container-inner{max-width:none;}
   .taskcols{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:0 18px;align-items:start;}
   .taskcol{min-width:0;}
@@ -314,8 +314,8 @@ details.moreopts[open] summary::before{content:'▾ ';}
 .m-sec{display:contents;}
 .qtile{margin:0 0 12px !important;display:flex;flex-direction:column;overflow:hidden;padding:12px 14px;}
 .herowx{flex-shrink:0;}
-@media(min-width:980px){.herowx{display:none;}}
-@media(max-width:979px){
+@media(min-width:700px){.herowx{display:none;}}
+@media(max-width:699px){
   #view-home{display:flex;flex-direction:column;}
   .home-main,.home-left,.home-side{display:contents;}
   .m-sec{display:block;}
@@ -328,12 +328,12 @@ details.moreopts[open] summary::before{content:'▾ ';}
   .hero{padding:16px 18px;}
   .hero .greet{font-size:21px;}
 }
-@media(min-width:980px){
+@media(min-width:700px){
   .m-quick{display:none;}            /* Quick-Kacheln nur mobil */
 }
-@media(min-width:980px){
+@media(min-width:700px){
   .container{max-width:1100px;}
-  #view-home{display:grid;grid-template-columns:1fr 330px;gap:18px;align-items:start;
+  #view-home{display:grid;grid-template-columns:1fr minmax(280px,330px);gap:16px;align-items:start;
     grid-template-areas:"main side" "left side";}
   .home-main{grid-area:main;} .home-side{grid-area:side;position:sticky;top:86px;} .home-left{grid-area:left;}
 }
