@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 46; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 47; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -1823,6 +1823,7 @@ async function renderHome(){
     </div>
     </div>
     <div class="home-side">
+      <div class="m-sec m-pomo">${pomoWidgetHtml()}</div>
       <div class="m-sec m-meds">${medsCardHtml()}</div>
       <div class="m-sec m-todo">${todoPanelHtml()}</div>
       <div class="m-sec m-post">${postitHtml()}</div>
@@ -1830,6 +1831,7 @@ async function renderHome(){
     </div>
   `;
   wireHomeChat(el);
+  wirePomoWidget(el);
   wireMeds(el);
   wireTodoPanel(el);
   wirePostit(el);
@@ -2886,6 +2888,73 @@ function openPlanTomorrow(){
 // ☑️ To-Do-Panel am Heute-Screen (rechts auf Mac/iPad, unten am iPhone)
 // ============================================================
 // ============================================================
+// 🍅 Pomodoro-Widget am Home (25/5): Extra-XP pro geschaffter Runde + Tageszähler
+// ============================================================
+let _pomoTick = null;
+const getPomoW = () => { try { return JSON.parse(localStorage.getItem("wopPomo")||"null"); } catch(e){ return null; } };
+const setPomoW = p => p ? localStorage.setItem("wopPomo", JSON.stringify(p)) : localStorage.removeItem("wopPomo");
+function pomoTodayCount(){ const l = getSetting("pomoLog", {}); return (l && l[dayKey(new Date())]) || 0; }
+async function awardPomodoro(){
+  const l = getSetting("pomoLog", {}) || {}, k = dayKey(new Date());
+  const pruned = {};
+  Object.keys(l).sort().slice(-30).forEach(x=>pruned[x]=l[x]);
+  pruned[k] = (pruned[k]||0) + 1;
+  await saveSetting("pomoLog", pruned);
+  await saveSetting("xpBonus", (getSetting("xpBonus",0)||0) + 25);
+  try { if (navigator.vibrate) navigator.vibrate([90,60,90]); } catch(e){}
+  toast("🍅 Pomodoro geschafft! +25 XP");
+}
+function pomoWidgetHtml(){
+  const p = getPomoW();
+  const n = pomoTodayCount();
+  let inner;
+  if (p){
+    const total = (p.phase==="break" ? 5 : 25) * 60;
+    const left = Math.max(0, total - Math.floor((Date.now()-p.start)/1000));
+    inner = `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <div>
+        <div id="pomoTime" style="font-size:26px;font-weight:800;font-variant-numeric:tabular-nums">${pad(Math.floor(left/60))}:${pad(left%60)}</div>
+        <div style="font-size:11.5px;color:var(--dim)">${p.phase==="break"?"☕️ Pause":"🔥 Fokus-Runde"}</div>
+      </div>
+      <button class="btn small sec" id="pomoStop">Abbrechen</button></div>`;
+  } else {
+    inner = `<button class="btn small" id="pomoStart" style="width:100%">▶ 25 Min starten</button>`;
+  }
+  return `<div class="card" id="pomoCard" style="border-left:4px solid #ff6347">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <b style="font-size:13.5px">🍅 Pomodoro</b>
+      <span style="font-size:11.5px;color:var(--dim);font-weight:700">heute: ${n} 🍅</span>
+    </div>${inner}</div>`;
+}
+function wirePomoWidget(root){
+  clearInterval(_pomoTick); _pomoTick = null;
+  const card = $("#pomoCard", root); if (!card) return;
+  const st = $("#pomoStart", card);
+  if (st) st.onclick = ()=>{ setPomoW({ phase:"work", start:Date.now() }); renderHome(); };
+  const sp = $("#pomoStop", card);
+  if (sp) sp.onclick = ()=>{ setPomoW(null); renderHome(); };
+  const p = getPomoW();
+  if (!p) return;
+  _pomoTick = setInterval(async ()=>{
+    const cur = getPomoW(); if (!cur){ clearInterval(_pomoTick); return; }
+    const total = (cur.phase==="break" ? 5 : 25) * 60;
+    const left = Math.max(0, total - Math.floor((Date.now()-cur.start)/1000));
+    const tEl = document.getElementById("pomoTime");
+    if (tEl) tEl.textContent = `${pad(Math.floor(left/60))}:${pad(left%60)}`;
+    if (left > 0) return;
+    clearInterval(_pomoTick); _pomoTick = null;
+    if (cur.phase === "work"){
+      await awardPomodoro();               // Runde voll → Zähler + Extra-XP
+      setPomoW({ phase:"break", start:Date.now() });
+    } else {
+      setPomoW(null);
+      toast("☕️ Pause vorbei – bereit für die nächste Runde!");
+    }
+    if (S.tab==="home") renderHome();
+  }, 1000);
+}
+
+// ============================================================
 // 💊 Medikamente: Zeile erscheint ab der eingestellten Uhrzeit, verschwindet nach dem Abhaken
 // ============================================================
 function getMeds(){ const m = getSetting("meds", []); return Array.isArray(m) ? m : []; }
@@ -3042,7 +3111,8 @@ function xpForCompletion(minutes, isPriority){
 }
 function totalXP(){
   const base = getSetting("xpBase", 0) || 0;
-  return base + S.completions.reduce((a,c)=>a + 10 + Math.min(c.minutes||0,120)*2, 0);
+  const bonus = getSetting("xpBonus", 0) || 0; // z.B. 🍅-Pomodoro-Belohnungen
+  return base + bonus + S.completions.reduce((a,c)=>a + 10 + Math.min(c.minutes||0,120)*2, 0);
 }
 function levelInfo(){
   const xp = totalXP();
@@ -3178,6 +3248,7 @@ function renderFocus(){
   _focusDomKey = domKey;
 
   if (pomoWorkDone || pomoBreakDone){ try { if (navigator.vibrate) navigator.vibrate([80,60,80]); } catch(e){} }
+  if (pomoWorkDone && !f.pomoAwarded){ f.pomoAwarded = true; setFocusState(f); awardPomodoro(); }
 
   const kicker = f.pomo ? `🍅 Pomodoro · Runde ${f.round||1}${onBreak?" · ☕️ Pause":""}`
     : f.label ? `${esc(f.label)} · noch ${f.queue.length+1} Schritt${f.queue.length?"e":""}`
@@ -3247,12 +3318,12 @@ function renderFocus(){
   if (pomoBtn) pomoBtn.onclick = ()=>{ const x=getFocus(); x.pomo=true; x.phase="work"; x.round=1;
     x.start=Date.now(); x.startedAt=x.startedAt||f.start; x.askedPomo=false; setFocusState(x); renderFocus(); };
   const brk = $("#fc_break");
-  if (brk) brk.onclick = ()=>{ const x=getFocus(); x.phase="break"; x.start=Date.now(); x.askedPomo=false; setFocusState(x); renderFocus(); };
+  if (brk) brk.onclick = ()=>{ const x=getFocus(); x.phase="break"; x.start=Date.now(); x.askedPomo=false; x.pomoAwarded=false; setFocusState(x); renderFocus(); };
   const keep = $("#fc_keepgoing");
   if (keep) keep.onclick = ()=>{ const x=getFocus(); x.askedPomo=true; setFocusState(x); renderFocus(); };
   const nxt = $("#fc_nextround");
   if (nxt) nxt.onclick = ()=>{ const x=getFocus(); x.phase="work"; x.round=(x.round||1)+1;
-    x.start=Date.now(); x.askedPomo=false; setFocusState(x); renderFocus(); };
+    x.start=Date.now(); x.askedPomo=false; x.pomoAwarded=false; setFocusState(x); renderFocus(); };
   const stopNow = $("#fc_stopnow");
   if (stopNow) stopNow.onclick = ()=>{ toast(`🍅 ${getFocus()?.round||1} Runde(n) – sauber!`); stopFocus(); };
   const more = $("#fc_more");
