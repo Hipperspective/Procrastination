@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 50; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 51; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -567,8 +567,12 @@ function startApp(){
   const sIn = $("#searchTasks");
   if (sIn) sIn.oninput = ()=>{ S.search = sIn.value; renderTasks(); };
   $("#fab").onclick = ()=>{ if(S.tab==="work") openWorkEntryForm(null); else if(S.tab==="plan") openBlockForm(null); else openTaskForm(null); };
-  $("#btnChat").onclick = ()=>{ switchTab("home");
-    setTimeout(()=>{ const c=$("#homeChat"); if(c){ c.scrollIntoView({behavior:"smooth",block:"center"}); const i=$("#chatIn"); if(i) i.focus(); } }, 150); };
+  $("#btnChat").onclick = ()=>{
+    const p = $("#chatPanel");
+    if (p){ p.classList.toggle("hidden"); if (!p.classList.contains("hidden")) renderChat(); }
+    const i = $("#chatIn"); if (i) i.focus();
+  };
+  wireChatBar();
   $("#btnSettings").onclick = openSettings;
   initRealtime();
   loadAll().then(()=>{ if (getFocus()) showFocus(); migratePushKey(); });
@@ -1825,12 +1829,10 @@ async function renderHome(){
     <div class="home-side">
       <div class="m-sec m-pomo">${pomoWidgetHtml()}</div>
       <div class="m-sec m-meds">${medsCardHtml()}</div>
-      <div class="m-sec m-chat">${homeChatHtml()}</div>
       <div class="m-sec m-todo">${todoPanelHtml()}</div>
       <div class="m-sec m-post">${postitHtml()}</div>
     </div>
   `;
-  wireHomeChat(el);
   wirePomoWidget(el);
   wireMeds(el);
   wireTodoPanel(el);
@@ -2444,8 +2446,23 @@ function openChat(){
   setTimeout(()=>$("#chatIn") && $("#chatIn").focus(), 150);
 }
 
+// Schwebende Assistenten-Leiste: einmalig verdrahten (statisches Markup in index.html)
+function wireChatBar(){
+  const bar = $("#chatBar"); if (!bar) return;
+  $("#chatMic").onclick = toggleVoice;
+  $("#chatSend").onclick = sendChat;
+  $("#chatIn").addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.preventDefault(); sendChat(); } });
+  $("#chatIn").addEventListener("focus", ()=>{
+    if (!localStorage.getItem("wopAiKey")) toast("Für den Assistenten erst den OpenAI-Key in ⚙️ speichern.");
+  });
+  $("#chatPanelClose").onclick = ()=>$("#chatPanel").classList.add("hidden");
+}
+
 function renderChat(){
   const log = $("#chatLog"); if (!log) return;
+  // Antworten-Panel automatisch aufklappen, sobald es etwas zu zeigen gibt
+  const panel = $("#chatPanel");
+  if (panel && (S.chat.length || S.chatBusy)) panel.classList.remove("hidden");
   log.innerHTML = S.chat.map(m=>{
     const cls = m.role==="user"?"user":m.role==="act"?"act":m.role==="sys"?"sys":"bot";
     return `<div class="cmsg ${cls}">${esc(m.text)}</div>`;
