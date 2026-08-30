@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 43; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 44; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -1401,18 +1401,57 @@ const WMO = { // Open-Meteo Wettercodes -> [Emoji, Text]
   80:["🌦","Regenschauer"],81:["🌧","Regenschauer"],82:["⛈","Heftige Schauer"],
   85:["🌨","Schneeschauer"],86:["🌨","Schneeschauer"],95:["⛈","Gewitter"],96:["⛈","Gewitter m. Hagel"],99:["⛈","Gewitter m. Hagel"],
 };
-let weatherCache = null; // {ts, data}
+let weatherCache = null; // {ts, key, data}
+let _effGeo = null;      // zuletzt verwendeter effektiver Wetter-Ort {lat,lon,name}
+
+// Effektiver Wetter-Ort: Basis-Standort, aber vergangene Reisen (📍 whereAmI) überschreiben ihn
+async function effectiveGeo(){
+  let base = null;
+  try { base = JSON.parse(localStorage.getItem("wopGeo")||"null"); } catch(e){}
+  const w = whereAmI();
+  if (w.name && base && w.name !== base.name){
+    const g = await geocodeCity(w.name);
+    if (g) return { lat:g.lat, lon:g.lon, name:g.name||w.name };
+  }
+  return base;
+}
+
+// Standort still aktualisieren, wenn die Erlaubnis schon erteilt ist (kein Popup)
+let _geoRefreshed = false;
+function refreshGeoSilently(){
+  if (_geoRefreshed) return; _geoRefreshed = true;
+  try {
+    if (!navigator.geolocation || !navigator.permissions) return;
+    navigator.permissions.query({ name:"geolocation" }).then(st=>{
+      if (st.state !== "granted") return;
+      navigator.geolocation.getCurrentPosition(p=>{
+        const g = { lat:+p.coords.latitude.toFixed(3), lon:+p.coords.longitude.toFixed(3), name:"Mein Standort" };
+        let old = null; try { old = JSON.parse(localStorage.getItem("wopGeo")||"null"); } catch(e){}
+        if (!old || Math.abs(old.lat-g.lat)>0.05 || Math.abs(old.lon-g.lon)>0.05){
+          localStorage.setItem("wopGeo", JSON.stringify(g));
+          saveSetting("geo", g);
+          weatherCache = null; _weekWx = {};
+          if (S.tab==="home") renderHome();
+        }
+      }, ()=>{}, { timeout:8000, maximumAge:600000 });
+    }).catch(()=>{});
+  } catch(e){}
+}
 
 async function fetchWeather(){
-  const loc = JSON.parse(localStorage.getItem("wopGeo")||"null");
+  const loc = await effectiveGeo();
   if (!loc) return null;
-  if (weatherCache && Date.now()-weatherCache.ts < 30*60000) return weatherCache.data;
+  _effGeo = loc;
+  // Fürs Morgen-Briefing mitziehen (Edge Function nutzt settings.geo)
+  try { if (S.settings && (!S.settings.geo || S.settings.geo.name !== loc.name)) saveSetting("geo", loc); } catch(e){}
+  const key = loc.lat+","+loc.lon;
+  if (weatherCache && weatherCache.key===key && Date.now()-weatherCache.ts < 30*60000) return weatherCache.data;
   try {
     const u = `https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}`+
       `&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m`+
       `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code&timezone=auto&forecast_days=2`;
     const r = await fetch(u); const d = await r.json();
-    weatherCache = { ts: Date.now(), data: d };
+    weatherCache = { ts: Date.now(), key, data: d };
     return d;
   } catch(e){ return null; }
 }
@@ -1639,6 +1678,7 @@ async function renderHome(){
   const el = $("#view-home");
   if (!el || S.tab!=="home") return;
   purgeDoneNotes(); // abgehakte Notizen vom letzten Mal verschwinden jetzt
+  refreshGeoSilently(); // Standort still nachziehen, wenn Erlaubnis schon da ist
 
   // Streak (gleiche Logik wie Statistik)
   const byDay = {};
@@ -1843,7 +1883,7 @@ async function renderHome(){
       const dmax = Math.round(w.daily.temperature_2m_max[0]), dmin = Math.round(w.daily.temperature_2m_min[0]);
       const rain = w.daily.precipitation_probability_max[0];
       const [ico2] = WMO[w.daily.weather_code[1]] || ["–"];
-      const locName = (JSON.parse(geo)||{}).name || "";
+      const locName = (_effGeo && _effGeo.name) || (JSON.parse(geo)||{}).name || "";
       wc.innerHTML = `<div class="weather">
         <div class="wico">${ico}</div>
         <div><div class="wtemp">${Math.round(w.current.temperature_2m)}°</div><div class="wdesc">${txt}${locName?" · "+esc(locName):""}</div></div>
@@ -3311,8 +3351,7 @@ async function geocodeCity(name){
 let _weekWx = { sig:"", ts:0, html:"" };
 async function fillWeekWeather(){
   const el = $("#weekWeather"); if (!el) return;
-  let base = null;
-  try { base = JSON.parse(localStorage.getItem("wopGeo")||"null"); } catch(e){}
+  const base = await effectiveGeo(); // Basis = aktueller Aufenthaltsort (inkl. vergangener Reisen)
   if (!base){
     el.innerHTML = `<b style="font-size:13.5px">🌤 Wetter-Woche</b>
       <div class="section-empty">Oben zuerst den Wetter-Standort aktivieren.</div>`;
