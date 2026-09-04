@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 53; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 54; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -545,8 +545,8 @@ $("#modalBg").addEventListener("click", e=>{ if(e.target.id==="modalBg") closeMo
 function switchTab(tab){
   S.tab = tab;
   $$(".tabbar button").forEach(b=>b.classList.toggle("active", b.dataset.tab===tab));
-  ["home","tasks","plan","work","stats","archive"].forEach(v=>$("#view-"+v).classList.toggle("hidden", v!==tab));
-  $("#pageTitle").textContent = {home:"Heute",tasks:"Aufgaben",plan:"Plan",work:"Arbeitszeit",stats:"Statistik",archive:"Archiv"}[tab];
+  ["home","tasks","plan","now","work","stats","archive"].forEach(v=>$("#view-"+v).classList.toggle("hidden", v!==tab));
+  $("#pageTitle").textContent = {home:"Heute",tasks:"Aufgaben",plan:"Plan",now:"Now",work:"Arbeitszeit",stats:"Statistik",archive:"Archiv"}[tab];
   $("#fab").classList.toggle("hidden", tab==="stats" || tab==="archive");
   renderAll();
 }
@@ -554,6 +554,7 @@ function switchTab(tab){
 function renderAll(){
   if (S.tab==="home") renderHome();
   if (S.tab==="plan") renderPlan();
+  if (S.tab==="now") renderNow();
   if (S.tab==="tasks") renderTasks();
   if (S.tab==="work") renderWork();
   if (S.tab==="stats") renderStats();
@@ -1789,8 +1790,6 @@ async function renderHome(){
     ${frogCardHtml()}
     </div>
 
-    <div class="m-sec m-now">${nowCardHtml()}</div>
-
     ${(()=>{ const c = calTileHtml(); return c ? `<div class="m-sec m-quick">
       <div class="card qtile" id="calTile" role="button" tabindex="0" style="cursor:pointer">${c}</div></div>` : ""; })()}
 
@@ -1835,7 +1834,6 @@ async function renderHome(){
       <div class="m-sec m-post">${postitHtml()}</div>
     </div>
   `;
-  wireNowCard(el);
   wirePomoWidget(el);
   wireMeds(el);
   wireTodoPanel(el);
@@ -2962,7 +2960,7 @@ function openNowPicker(){
     S.settings.nowList = l; saveSetting("nowList", l);
     r.classList.toggle("on");
   });
-  $("#nowPickDone").onclick = ()=>{ closeModal(); renderHome(); };
+  $("#nowPickDone").onclick = ()=>{ closeModal(); renderAll(); };
 }
 
 function wireNowCard(root){
@@ -2975,7 +2973,7 @@ function wireNowCard(root){
     const text = add.value.trim(); if (!text) return;
     add.value = "";
     const l = getNowList(); l.push({ id: uid(), text });
-    await saveNowList(l); renderHome();
+    await saveNowList(l); renderAll();
     setTimeout(()=>{ const ni=$("#nowAdd"); if(ni) ni.focus(); }, 50);
   });
   $$("[data-nowchk]", card).forEach(b=>b.onclick = async (e)=>{
@@ -2986,12 +2984,12 @@ function wireNowCard(root){
       if (isCompletedToday(t)) uncompleteToday(t);
       else { celebrate(e.currentTarget, xpForCompletion(t.duration_minutes, t.is_priority)); completeTask(t); }
     } else {
-      it.done = !it.done; await saveNowList(l); renderHome();
+      it.done = !it.done; await saveNowList(l); renderAll();
     }
   });
   $$("[data-del]", card).forEach(b=>b.onclick = async (e)=>{
     e.stopPropagation();
-    await saveNowList(getNowList().filter(x=>x.id!==b.dataset.del)); renderHome();
+    await saveNowList(getNowList().filter(x=>x.id!==b.dataset.del)); renderAll();
   });
   $$("[data-play]", card).forEach(b=>b.onclick = (e)=>{ e.stopPropagation(); startFocusTask(b.dataset.play); });
   // Drag & Drop am ⠿-Griff (Pointer Events: Maus + Touch)
@@ -3019,13 +3017,33 @@ function wireNowCard(root){
         const order = [...wrap.querySelectorAll(".nowrow")].map(r=>old.find(x=>x.id===r.dataset.nid)).filter(Boolean);
         // nicht angezeigte Einträge (archivierte Tasks) hinten anhängen, damit nichts verloren geht
         old.forEach(x=>{ if (!order.includes(x)) order.push(x); });
-        await saveNowList(order); renderHome();
+        await saveNowList(order); renderAll();
       };
       g.addEventListener("pointermove", move);
       g.addEventListener("pointerup", up);
       g.addEventListener("pointercancel", up);
     });
   });
+}
+
+// Voller Now-Tab: Karte + Fortschritt/Restzeit
+function renderNow(){
+  const el = $("#view-now"); if (!el || S.tab!=="now") return;
+  const list = getNowList().filter(it => !it.taskId || S.tasks.some(t=>t.id===it.taskId && !t.is_archived));
+  const isDone = it => { const t = it.taskId ? S.tasks.find(x=>x.id===it.taskId) : null;
+    return t ? isCompletedToday(t) : !!it.done; };
+  const doneN = list.filter(isDone).length;
+  const openMin = list.reduce((a,it)=>{
+    if (isDone(it)) return a;
+    const t = it.taskId ? S.tasks.find(x=>x.id===it.taskId) : null;
+    return a + (t ? (t.duration_minutes||0) : 0);
+  }, 0);
+  el.innerHTML = `
+    <div class="homehead" style="margin-top:2px"><h2>▶️ Der Reihe nach</h2>
+      <span style="font-size:12px;color:var(--dim);font-weight:700">${list.length?`${doneN}/${list.length} erledigt${openMin?` · noch ~${fmtMin(openMin)}`:""}`:""}</span></div>
+    ${nowCardHtml()}
+    ${list.length && doneN===list.length ? `<div class="card" style="text-align:center;color:var(--green);font-weight:700">🎉 Alles abgearbeitet – stark!</div>` : ""}`;
+  wireNowCard(el);
 }
 
 // ============================================================
