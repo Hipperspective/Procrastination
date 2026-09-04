@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 54; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 55; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -2992,36 +2992,51 @@ function wireNowCard(root){
     await saveNowList(getNowList().filter(x=>x.id!==b.dataset.del)); renderAll();
   });
   $$("[data-play]", card).forEach(b=>b.onclick = (e)=>{ e.stopPropagation(); startFocusTask(b.dataset.play); });
-  // Drag & Drop am ⠿-Griff (Pointer Events: Maus + Touch)
+  // Drag & Drop am ⠿-Griff: Zeile wird nur visuell verschoben (transform),
+  // umsortiert wird erst beim Loslassen – zuverlässig mit Touch UND Maus.
   const wrap = $("#nowRows", card);
   $$(".nowgrip", card).forEach(g=>{
     g.addEventListener("pointerdown", e=>{
       e.preventDefault();
       const row = g.closest(".nowrow");
+      const rows = [...wrap.querySelectorAll(".nowrow")];
+      const fromIdx = rows.indexOf(row);
+      const others = rows.filter(r=>r!==row);
+      const mids = others.map(r=>{ const rc=r.getBoundingClientRect(); return rc.top + rc.height/2; });
+      const startY = e.clientY;
+      const h = row.offsetHeight;
+      let toIdx = fromIdx, movedFar = false;
       row.classList.add("dragging");
-      try { g.setPointerCapture(e.pointerId); } catch(_){}
       const move = ev=>{
-        const others = [...wrap.querySelectorAll(".nowrow")].filter(r=>r!==row);
-        for (const r of others){
-          const rect = r.getBoundingClientRect();
-          if (ev.clientY < rect.top + rect.height/2){ wrap.insertBefore(row, r); return; }
-        }
-        wrap.appendChild(row);
+        if (Math.abs(ev.clientY - startY) > 6) movedFar = true;
+        row.style.transform = `translateY(${ev.clientY - startY}px)`;
+        toIdx = mids.filter(m=>ev.clientY > m).length;
+        others.forEach((r,i)=>{
+          const orig = i < fromIdx ? i : i + 1;   // ursprüngliche Position in der Gesamtliste
+          const fin  = i < toIdx  ? i : i + 1;    // Position, wenn die Zeile bei toIdx landet
+          const d = (fin - orig) * h;
+          r.style.transform = d ? `translateY(${d}px)` : "";
+        });
       };
       const up = async ()=>{
-        g.removeEventListener("pointermove", move);
-        g.removeEventListener("pointerup", up);
-        g.removeEventListener("pointercancel", up);
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", up);
         row.classList.remove("dragging");
-        const old = getNowList();
-        const order = [...wrap.querySelectorAll(".nowrow")].map(r=>old.find(x=>x.id===r.dataset.nid)).filter(Boolean);
-        // nicht angezeigte Einträge (archivierte Tasks) hinten anhängen, damit nichts verloren geht
-        old.forEach(x=>{ if (!order.includes(x)) order.push(x); });
-        await saveNowList(order); renderAll();
+        rows.forEach(r=>r.style.transform = "");
+        if (movedFar && toIdx !== fromIdx){
+          const ids = others.map(r=>r.dataset.nid);
+          ids.splice(toIdx, 0, row.dataset.nid);
+          const old = getNowList();
+          const order = ids.map(id=>old.find(x=>x.id===id)).filter(Boolean);
+          old.forEach(x=>{ if (!order.includes(x)) order.push(x); }); // Verstecktes nicht verlieren
+          await saveNowList(order);
+        }
+        renderAll();
       };
-      g.addEventListener("pointermove", move);
-      g.addEventListener("pointerup", up);
-      g.addEventListener("pointercancel", up);
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
     });
   });
 }

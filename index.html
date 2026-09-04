@@ -287,13 +287,13 @@ details.moreopts[open] summary::before{content:'▾ ';}
 .locsec .arr{color:var(--dim2);font-size:12px;margin-left:auto;}
 
 /* ▶️ Now-Karte: sortierbare Abarbeitungs-Liste */
-.nowrow{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);}
+.nowrow{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);transition:transform .13s ease;}
 .nowrow:last-child{border-bottom:none;}
 .nowrow .pt{flex:1;font-size:14.5px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .nowrow.pdone .pt{text-decoration:line-through;color:var(--dim);}
-.nowrow.dragging{opacity:.65;background:var(--card2);border-radius:10px;}
+.nowrow.dragging{opacity:.75;background:var(--card2);border-radius:10px;transition:none;position:relative;z-index:5;box-shadow:0 6px 20px rgba(0,0,0,.35);}
 .nowrow .chk{width:24px;height:24px;min-width:24px;margin:0;font-size:12px;}
-.nowgrip{cursor:grab;touch-action:none;color:var(--dim2);font-size:16px;padding:4px 2px;user-select:none;-webkit-user-select:none;}
+.nowgrip{cursor:grab;touch-action:none;color:var(--dim2);font-size:18px;padding:8px 8px;margin:-4px 0;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;}
 .nownum{font-size:11px;font-weight:800;color:var(--accent2);min-width:16px;text-align:center;}
 
 /* 💬 Schwebende Assistenten-Leiste über der Tab-Bar */
