@@ -286,6 +286,16 @@ details.moreopts[open] summary::before{content:'▾ ';}
 .locsec{cursor:pointer;user-select:none;}
 .locsec .arr{color:var(--dim2);font-size:12px;margin-left:auto;}
 
+/* ▶️ Now-Karte: sortierbare Abarbeitungs-Liste */
+.nowrow{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);}
+.nowrow:last-child{border-bottom:none;}
+.nowrow .pt{flex:1;font-size:14.5px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.nowrow.pdone .pt{text-decoration:line-through;color:var(--dim);}
+.nowrow.dragging{opacity:.65;background:var(--card2);border-radius:10px;}
+.nowrow .chk{width:24px;height:24px;min-width:24px;margin:0;font-size:12px;}
+.nowgrip{cursor:grab;touch-action:none;color:var(--dim2);font-size:16px;padding:4px 2px;user-select:none;-webkit-user-select:none;}
+.nownum{font-size:11px;font-weight:800;color:var(--accent2);min-width:16px;text-align:center;}
+
 /* 💬 Schwebende Assistenten-Leiste über der Tab-Bar */
 #chatBar{position:fixed;left:0;right:0;bottom:calc(58px + var(--safe-bottom));z-index:46;
   padding:8px 12px;background:var(--glass2);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
@@ -332,10 +342,10 @@ details.moreopts[open] summary::before{content:'▾ ';}
   #view-home{display:flex;flex-direction:column;}
   .home-main,.home-left,.home-side{display:contents;}
   .m-sec{display:block;}
-  .m-hero{order:1;} .m-quick{order:2;} .m-chat{order:3;}
-  .m-pomo{order:4;} .m-meds{order:5;} .m-todo{order:6;} .m-post{order:7;}
-  .m-next{order:8;} .m-rout{order:9;} .m-blocks{order:10;}
-  .m-stats{order:11;} .m-planned{order:12;} .m-ww{order:13;}
+  .m-hero{order:1;} .m-now{order:2;} .m-quick{order:3;} .m-chat{order:4;}
+  .m-pomo{order:5;} .m-meds{order:6;} .m-todo{order:7;} .m-post{order:8;}
+  .m-next{order:9;} .m-rout{order:10;} .m-blocks{order:11;}
+  .m-stats{order:12;} .m-planned{order:13;} .m-ww{order:14;}
   .xphide{display:none;}             /* XP-Zeile mobil ausblenden */
   .hero{padding:16px 18px;}
   .hero .greet{font-size:21px;}

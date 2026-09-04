@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 52; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 53; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -1789,6 +1789,8 @@ async function renderHome(){
     ${frogCardHtml()}
     </div>
 
+    <div class="m-sec m-now">${nowCardHtml()}</div>
+
     ${(()=>{ const c = calTileHtml(); return c ? `<div class="m-sec m-quick">
       <div class="card qtile" id="calTile" role="button" tabindex="0" style="cursor:pointer">${c}</div></div>` : ""; })()}
 
@@ -1833,6 +1835,7 @@ async function renderHome(){
       <div class="m-sec m-post">${postitHtml()}</div>
     </div>
   `;
+  wireNowCard(el);
   wirePomoWidget(el);
   wireMeds(el);
   wireTodoPanel(el);
@@ -2904,6 +2907,127 @@ function openPlanTomorrow(){
 // ============================================================
 // ☑️ To-Do-Panel am Heute-Screen (rechts auf Mac/iPad, unten am iPhone)
 // ============================================================
+// ============================================================
+// ▶️ NOW: Abarbeitungs-Reihenfolge für heute (Drag & Drop, synchron via settings)
+// ============================================================
+function getNowList(){ const l = getSetting("nowList", []); return Array.isArray(l) ? l : []; }
+async function saveNowList(l){ S.settings.nowList = l; await saveSetting("nowList", l); }
+
+function nowCardHtml(){
+  // Einträge, deren Aufgabe es nicht mehr gibt (erledigt & archiviert), fliegen aus der Anzeige
+  const list = getNowList().filter(it => !it.taskId || S.tasks.some(t=>t.id===it.taskId && !t.is_archived));
+  const rows = list.map((it, i)=>{
+    const t = it.taskId ? S.tasks.find(x=>x.id===it.taskId) : null;
+    const done = t ? isCompletedToday(t) : !!it.done;
+    return `<div class="nowrow ${done?"pdone":""}" data-nid="${esc(it.id)}">
+      <span class="nowgrip" data-grip="${esc(it.id)}" aria-label="Verschieben">⠿</span>
+      <span class="nownum">${i+1}</span>
+      <button class="chk ${done?"on":""}" data-nowchk="${esc(it.id)}" aria-label="Erledigt">✓</button>
+      <span class="pt">${esc(t ? t.title : (it.text||""))}</span>
+      ${t?`<span style="font-size:11px;color:var(--dim2);white-space:nowrap">${fmtMin(t.duration_minutes)}</span>
+        <button class="iconbtn nowplay" data-play="${t.id}" style="padding:2px 6px;font-size:13px" aria-label="Fokus starten">▶</button>`:""}
+      <button class="iconbtn nowdel" data-del="${esc(it.id)}" style="padding:2px 6px;color:var(--dim2);font-size:13px" aria-label="Entfernen">✕</button>
+    </div>`;
+  }).join("");
+  return `<div class="card" id="nowCard" style="border-left:4px solid var(--green)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <b style="font-size:14px">▶️ Now – der Reihe nach</b>
+      <button class="btn small sec" id="nowPick" style="width:auto;padding:6px 12px">＋ Aufgaben</button>
+    </div>
+    <div id="nowRows">${rows}</div>
+    ${rows?"":`<div class="section-empty" style="padding:4px 0">Deine Reihenfolge für jetzt: ＋ Aufgaben wählen oder unten eigenen Punkt tippen.</div>`}
+    <input id="nowAdd" placeholder="＋ Eigener Punkt, Enter…" autocomplete="off" enterkeyhint="done"
+      style="margin-top:6px;background:transparent;border:none;border-top:1px dashed var(--line);border-radius:0;padding:8px 2px 2px;font-size:13.5px">
+  </div>`;
+}
+
+function openNowPicker(){
+  const inList = new Set(getNowList().map(it=>it.taskId).filter(Boolean));
+  const cats = {};
+  S.tasks.filter(t=>!t.is_archived && !isRoutineTask(t) && !isCompletedToday(t) && startReached(t))
+    .forEach(t=>{ const k=t.location||"Sonstiges"; (cats[k]=cats[k]||[]).push(t); });
+  openModal(`<h3>▶️ Now zusammenstellen</h3>
+    <div style="font-size:12.5px;color:var(--dim)">Antippen = rein/raus. Sortieren dann per ⠿ auf der Karte.</div>` +
+    Object.entries(cats).map(([loc,arr])=>`
+      <label style="margin-top:12px">${esc(loc)}</label>
+      ${arr.map(t=>`<div class="subrow nowpick ${inList.has(t.id)?"on":""}" data-tid="${t.id}">
+        <span class="box">✓</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.title)}</span>
+        <span style="font-size:11px;color:var(--dim2)">${fmtMin(t.duration_minutes)}</span></div>`).join("")}`).join("") +
+    `<div style="height:14px"></div><button class="btn" id="nowPickDone">Fertig</button>`);
+  $$(".nowpick").forEach(r=>r.onclick = ()=>{
+    const tid = r.dataset.tid;
+    let l = getNowList();
+    if (l.some(it=>it.taskId===tid)) l = l.filter(it=>it.taskId!==tid);
+    else l.push({ id: uid(), taskId: tid });
+    S.settings.nowList = l; saveSetting("nowList", l);
+    r.classList.toggle("on");
+  });
+  $("#nowPickDone").onclick = ()=>{ closeModal(); renderHome(); };
+}
+
+function wireNowCard(root){
+  const card = $("#nowCard", root); if (!card) return;
+  $("#nowPick", card).onclick = openNowPicker;
+  const add = $("#nowAdd", card);
+  add.addEventListener("keydown", async e=>{
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const text = add.value.trim(); if (!text) return;
+    add.value = "";
+    const l = getNowList(); l.push({ id: uid(), text });
+    await saveNowList(l); renderHome();
+    setTimeout(()=>{ const ni=$("#nowAdd"); if(ni) ni.focus(); }, 50);
+  });
+  $$("[data-nowchk]", card).forEach(b=>b.onclick = async (e)=>{
+    e.stopPropagation();
+    const l = getNowList(); const it = l.find(x=>x.id===b.dataset.nowchk); if (!it) return;
+    if (it.taskId){
+      const t = S.tasks.find(x=>x.id===it.taskId); if (!t) return;
+      if (isCompletedToday(t)) uncompleteToday(t);
+      else { celebrate(e.currentTarget, xpForCompletion(t.duration_minutes, t.is_priority)); completeTask(t); }
+    } else {
+      it.done = !it.done; await saveNowList(l); renderHome();
+    }
+  });
+  $$("[data-del]", card).forEach(b=>b.onclick = async (e)=>{
+    e.stopPropagation();
+    await saveNowList(getNowList().filter(x=>x.id!==b.dataset.del)); renderHome();
+  });
+  $$("[data-play]", card).forEach(b=>b.onclick = (e)=>{ e.stopPropagation(); startFocusTask(b.dataset.play); });
+  // Drag & Drop am ⠿-Griff (Pointer Events: Maus + Touch)
+  const wrap = $("#nowRows", card);
+  $$(".nowgrip", card).forEach(g=>{
+    g.addEventListener("pointerdown", e=>{
+      e.preventDefault();
+      const row = g.closest(".nowrow");
+      row.classList.add("dragging");
+      try { g.setPointerCapture(e.pointerId); } catch(_){}
+      const move = ev=>{
+        const others = [...wrap.querySelectorAll(".nowrow")].filter(r=>r!==row);
+        for (const r of others){
+          const rect = r.getBoundingClientRect();
+          if (ev.clientY < rect.top + rect.height/2){ wrap.insertBefore(row, r); return; }
+        }
+        wrap.appendChild(row);
+      };
+      const up = async ()=>{
+        g.removeEventListener("pointermove", move);
+        g.removeEventListener("pointerup", up);
+        g.removeEventListener("pointercancel", up);
+        row.classList.remove("dragging");
+        const old = getNowList();
+        const order = [...wrap.querySelectorAll(".nowrow")].map(r=>old.find(x=>x.id===r.dataset.nid)).filter(Boolean);
+        // nicht angezeigte Einträge (archivierte Tasks) hinten anhängen, damit nichts verloren geht
+        old.forEach(x=>{ if (!order.includes(x)) order.push(x); });
+        await saveNowList(order); renderHome();
+      };
+      g.addEventListener("pointermove", move);
+      g.addEventListener("pointerup", up);
+      g.addEventListener("pointercancel", up);
+    });
+  });
+}
+
 // ============================================================
 // 🍅 Pomodoro-Widget am Home (25/5): Extra-XP pro geschaffter Runde + Tageszähler
 // ============================================================
