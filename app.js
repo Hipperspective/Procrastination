@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 55; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 56; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -1771,6 +1771,7 @@ async function renderHome(){
 
   el.innerHTML = `
     <div class="home-left">
+      <div class="m-sec m-must">${MustQ.cardHtml()}</div>
       <div class="m-sec m-ww"><div class="card" id="weekWeather"><b style="font-size:13.5px">🌤 Wetter-Woche</b><div class="section-empty">lädt…</div></div></div>
       <div class="m-sec m-planned">${plannedCardHtml()}</div>
     </div>
@@ -1834,6 +1835,7 @@ async function renderHome(){
       <div class="m-sec m-post">${postitHtml()}</div>
     </div>
   `;
+  MustQ.wire(el);
   wirePomoWidget(el);
   wireMeds(el);
   wireTodoPanel(el);
@@ -2905,160 +2907,171 @@ function openPlanTomorrow(){
 // ============================================================
 // ☑️ To-Do-Panel am Heute-Screen (rechts auf Mac/iPad, unten am iPhone)
 // ============================================================
+// Sortierbare Abarbeitungs-Listen: ▶️ Now-Tab + 🎯 "Heute unbedingt" am Home.
+// Gemeinsame Mechanik (Aufgaben-Picker, eigene Punkte, Abhaken, Drag & Drop).
 // ============================================================
-// ▶️ NOW: Abarbeitungs-Reihenfolge für heute (Drag & Drop, synchron via settings)
-// ============================================================
-function getNowList(){ const l = getSetting("nowList", []); return Array.isArray(l) ? l : []; }
-async function saveNowList(l){ S.settings.nowList = l; await saveSetting("nowList", l); }
+function makeQueue(cfg){
+  const q = {};
+  q.get = () => { const l = getSetting(cfg.key, []); return Array.isArray(l) ? l : []; };
+  q.save = async l => { S.settings[cfg.key] = l; await saveSetting(cfg.key, l); };
+  q.visible = () => q.get().filter(it => !it.taskId || S.tasks.some(t=>t.id===it.taskId && !t.is_archived));
+  q.isDone = it => { const t = it.taskId ? S.tasks.find(x=>x.id===it.taskId) : null;
+    return t ? isCompletedToday(t) : !!it.done; };
 
-function nowCardHtml(){
-  // Einträge, deren Aufgabe es nicht mehr gibt (erledigt & archiviert), fliegen aus der Anzeige
-  const list = getNowList().filter(it => !it.taskId || S.tasks.some(t=>t.id===it.taskId && !t.is_archived));
-  const rows = list.map((it, i)=>{
-    const t = it.taskId ? S.tasks.find(x=>x.id===it.taskId) : null;
-    const done = t ? isCompletedToday(t) : !!it.done;
-    return `<div class="nowrow ${done?"pdone":""}" data-nid="${esc(it.id)}">
-      <span class="nowgrip" data-grip="${esc(it.id)}" aria-label="Verschieben">⠿</span>
-      <span class="nownum">${i+1}</span>
-      <button class="chk ${done?"on":""}" data-nowchk="${esc(it.id)}" aria-label="Erledigt">✓</button>
-      <span class="pt">${esc(t ? t.title : (it.text||""))}</span>
-      ${t?`<span style="font-size:11px;color:var(--dim2);white-space:nowrap">${fmtMin(t.duration_minutes)}</span>
-        <button class="iconbtn nowplay" data-play="${t.id}" style="padding:2px 6px;font-size:13px" aria-label="Fokus starten">▶</button>`:""}
-      <button class="iconbtn nowdel" data-del="${esc(it.id)}" style="padding:2px 6px;color:var(--dim2);font-size:13px" aria-label="Entfernen">✕</button>
+  q.cardHtml = () => {
+    const list = q.visible();
+    const rows = list.map((it, i)=>{
+      const t = it.taskId ? S.tasks.find(x=>x.id===it.taskId) : null;
+      const done = q.isDone(it);
+      return `<div class="nowrow ${done?"pdone":""}" data-nid="${esc(it.id)}">
+        <span class="nowgrip" aria-label="Verschieben">⠿</span>
+        <span class="nownum">${i+1}</span>
+        <button class="chk ${done?"on":""}" data-qchk="${esc(it.id)}" aria-label="Erledigt">✓</button>
+        <span class="pt">${esc(t ? t.title : (it.text||""))}</span>
+        ${t?`<span style="font-size:11px;color:var(--dim2);white-space:nowrap">${fmtMin(t.duration_minutes)}</span>
+          <button class="iconbtn" data-qplay="${t.id}" style="padding:2px 6px;font-size:13px" aria-label="Fokus starten">▶</button>`:""}
+        <button class="iconbtn" data-qdel="${esc(it.id)}" style="padding:2px 6px;color:var(--dim2);font-size:13px" aria-label="Entfernen">✕</button>
+      </div>`;
+    }).join("");
+    return `<div class="card" id="${cfg.pref}Card" style="border-left:4px solid ${cfg.color}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <b style="font-size:14px">${cfg.title}</b>
+        <button class="btn small sec" id="${cfg.pref}Pick" style="width:auto;padding:6px 12px">＋ Aufgaben</button>
+      </div>
+      <div id="${cfg.pref}Rows">${rows}</div>
+      ${rows?"":`<div class="section-empty" style="padding:4px 0">${cfg.empty}</div>`}
+      <input id="${cfg.pref}Add" placeholder="＋ Eigener Punkt, Enter…" autocomplete="off" enterkeyhint="done"
+        style="margin-top:6px;background:transparent;border:none;border-top:1px dashed var(--line);border-radius:0;padding:8px 2px 2px;font-size:13.5px">
     </div>`;
-  }).join("");
-  return `<div class="card" id="nowCard" style="border-left:4px solid var(--green)">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-      <b style="font-size:14px">▶️ Now – der Reihe nach</b>
-      <button class="btn small sec" id="nowPick" style="width:auto;padding:6px 12px">＋ Aufgaben</button>
-    </div>
-    <div id="nowRows">${rows}</div>
-    ${rows?"":`<div class="section-empty" style="padding:4px 0">Deine Reihenfolge für jetzt: ＋ Aufgaben wählen oder unten eigenen Punkt tippen.</div>`}
-    <input id="nowAdd" placeholder="＋ Eigener Punkt, Enter…" autocomplete="off" enterkeyhint="done"
-      style="margin-top:6px;background:transparent;border:none;border-top:1px dashed var(--line);border-radius:0;padding:8px 2px 2px;font-size:13.5px">
-  </div>`;
-}
+  };
 
-function openNowPicker(){
-  const inList = new Set(getNowList().map(it=>it.taskId).filter(Boolean));
-  const cats = {};
-  S.tasks.filter(t=>!t.is_archived && !isRoutineTask(t) && !isCompletedToday(t) && startReached(t))
-    .forEach(t=>{ const k=t.location||"Sonstiges"; (cats[k]=cats[k]||[]).push(t); });
-  openModal(`<h3>▶️ Now zusammenstellen</h3>
-    <div style="font-size:12.5px;color:var(--dim)">Antippen = rein/raus. Sortieren dann per ⠿ auf der Karte.</div>` +
-    Object.entries(cats).map(([loc,arr])=>`
-      <label style="margin-top:12px">${esc(loc)}</label>
-      ${arr.map(t=>`<div class="subrow nowpick ${inList.has(t.id)?"on":""}" data-tid="${t.id}">
-        <span class="box">✓</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.title)}</span>
-        <span style="font-size:11px;color:var(--dim2)">${fmtMin(t.duration_minutes)}</span></div>`).join("")}`).join("") +
-    `<div style="height:14px"></div><button class="btn" id="nowPickDone">Fertig</button>`);
-  $$(".nowpick").forEach(r=>r.onclick = ()=>{
-    const tid = r.dataset.tid;
-    let l = getNowList();
-    if (l.some(it=>it.taskId===tid)) l = l.filter(it=>it.taskId!==tid);
-    else l.push({ id: uid(), taskId: tid });
-    S.settings.nowList = l; saveSetting("nowList", l);
-    r.classList.toggle("on");
-  });
-  $("#nowPickDone").onclick = ()=>{ closeModal(); renderAll(); };
-}
-
-function wireNowCard(root){
-  const card = $("#nowCard", root); if (!card) return;
-  $("#nowPick", card).onclick = openNowPicker;
-  const add = $("#nowAdd", card);
-  add.addEventListener("keydown", async e=>{
-    if (e.key !== "Enter") return;
-    e.preventDefault();
-    const text = add.value.trim(); if (!text) return;
-    add.value = "";
-    const l = getNowList(); l.push({ id: uid(), text });
-    await saveNowList(l); renderAll();
-    setTimeout(()=>{ const ni=$("#nowAdd"); if(ni) ni.focus(); }, 50);
-  });
-  $$("[data-nowchk]", card).forEach(b=>b.onclick = async (e)=>{
-    e.stopPropagation();
-    const l = getNowList(); const it = l.find(x=>x.id===b.dataset.nowchk); if (!it) return;
-    if (it.taskId){
-      const t = S.tasks.find(x=>x.id===it.taskId); if (!t) return;
-      if (isCompletedToday(t)) uncompleteToday(t);
-      else { celebrate(e.currentTarget, xpForCompletion(t.duration_minutes, t.is_priority)); completeTask(t); }
-    } else {
-      it.done = !it.done; await saveNowList(l); renderAll();
-    }
-  });
-  $$("[data-del]", card).forEach(b=>b.onclick = async (e)=>{
-    e.stopPropagation();
-    await saveNowList(getNowList().filter(x=>x.id!==b.dataset.del)); renderAll();
-  });
-  $$("[data-play]", card).forEach(b=>b.onclick = (e)=>{ e.stopPropagation(); startFocusTask(b.dataset.play); });
-  // Drag & Drop am ⠿-Griff: Zeile wird nur visuell verschoben (transform),
-  // umsortiert wird erst beim Loslassen – zuverlässig mit Touch UND Maus.
-  const wrap = $("#nowRows", card);
-  $$(".nowgrip", card).forEach(g=>{
-    g.addEventListener("pointerdown", e=>{
-      e.preventDefault();
-      const row = g.closest(".nowrow");
-      const rows = [...wrap.querySelectorAll(".nowrow")];
-      const fromIdx = rows.indexOf(row);
-      const others = rows.filter(r=>r!==row);
-      const mids = others.map(r=>{ const rc=r.getBoundingClientRect(); return rc.top + rc.height/2; });
-      const startY = e.clientY;
-      const h = row.offsetHeight;
-      let toIdx = fromIdx, movedFar = false;
-      row.classList.add("dragging");
-      const move = ev=>{
-        if (Math.abs(ev.clientY - startY) > 6) movedFar = true;
-        row.style.transform = `translateY(${ev.clientY - startY}px)`;
-        toIdx = mids.filter(m=>ev.clientY > m).length;
-        others.forEach((r,i)=>{
-          const orig = i < fromIdx ? i : i + 1;   // ursprüngliche Position in der Gesamtliste
-          const fin  = i < toIdx  ? i : i + 1;    // Position, wenn die Zeile bei toIdx landet
-          const d = (fin - orig) * h;
-          r.style.transform = d ? `translateY(${d}px)` : "";
-        });
-      };
-      const up = async ()=>{
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", up);
-        window.removeEventListener("pointercancel", up);
-        row.classList.remove("dragging");
-        rows.forEach(r=>r.style.transform = "");
-        if (movedFar && toIdx !== fromIdx){
-          const ids = others.map(r=>r.dataset.nid);
-          ids.splice(toIdx, 0, row.dataset.nid);
-          const old = getNowList();
-          const order = ids.map(id=>old.find(x=>x.id===id)).filter(Boolean);
-          old.forEach(x=>{ if (!order.includes(x)) order.push(x); }); // Verstecktes nicht verlieren
-          await saveNowList(order);
-        }
-        renderAll();
-      };
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", up);
-      window.addEventListener("pointercancel", up);
+  q.openPicker = () => {
+    const inList = new Set(q.get().map(it=>it.taskId).filter(Boolean));
+    const cats = {};
+    S.tasks.filter(t=>!t.is_archived && !isRoutineTask(t) && !isCompletedToday(t) && startReached(t))
+      .forEach(t=>{ const k=t.location||"Sonstiges"; (cats[k]=cats[k]||[]).push(t); });
+    openModal(`<h3>${cfg.title}</h3>
+      <div style="font-size:12.5px;color:var(--dim)">Antippen = rein/raus. Sortieren dann per ⠿ auf der Karte.</div>` +
+      Object.entries(cats).map(([loc,arr])=>`
+        <label style="margin-top:12px">${esc(loc)}</label>
+        ${arr.map(t=>`<div class="subrow qpick ${inList.has(t.id)?"on":""}" data-tid="${t.id}">
+          <span class="box">✓</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.title)}</span>
+          <span style="font-size:11px;color:var(--dim2)">${fmtMin(t.duration_minutes)}</span></div>`).join("")}`).join("") +
+      `<div style="height:14px"></div><button class="btn" id="qPickDone">Fertig</button>`);
+    $$(".qpick").forEach(r=>r.onclick = ()=>{
+      const tid = r.dataset.tid;
+      let l = q.get();
+      if (l.some(it=>it.taskId===tid)) l = l.filter(it=>it.taskId!==tid);
+      else l.push({ id: uid(), taskId: tid });
+      S.settings[cfg.key] = l; saveSetting(cfg.key, l);
+      r.classList.toggle("on");
     });
-  });
+    $("#qPickDone").onclick = ()=>{ closeModal(); renderAll(); };
+  };
+
+  q.wire = (root) => {
+    const card = $("#"+cfg.pref+"Card", root); if (!card) return;
+    $("#"+cfg.pref+"Pick", card).onclick = q.openPicker;
+    const add = $("#"+cfg.pref+"Add", card);
+    add.addEventListener("keydown", async e=>{
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      const text = add.value.trim(); if (!text) return;
+      add.value = "";
+      const l = q.get(); l.push({ id: uid(), text });
+      await q.save(l); renderAll();
+      setTimeout(()=>{ const ni=$("#"+cfg.pref+"Add"); if(ni) ni.focus(); }, 50);
+    });
+    $$("[data-qchk]", card).forEach(b=>b.onclick = async (e)=>{
+      e.stopPropagation();
+      const l = q.get(); const it = l.find(x=>x.id===b.dataset.qchk); if (!it) return;
+      if (it.taskId){
+        const t = S.tasks.find(x=>x.id===it.taskId); if (!t) return;
+        if (isCompletedToday(t)) uncompleteToday(t);
+        else { celebrate(e.currentTarget, xpForCompletion(t.duration_minutes, t.is_priority)); completeTask(t); }
+      } else {
+        it.done = !it.done; await q.save(l); renderAll();
+      }
+    });
+    $$("[data-qdel]", card).forEach(b=>b.onclick = async (e)=>{
+      e.stopPropagation();
+      await q.save(q.get().filter(x=>x.id!==b.dataset.qdel)); renderAll();
+    });
+    $$("[data-qplay]", card).forEach(b=>b.onclick = (e)=>{ e.stopPropagation(); startFocusTask(b.dataset.qplay); });
+    // Drag & Drop am ⠿-Griff: Zeile wird nur visuell verschoben (transform),
+    // umsortiert wird erst beim Loslassen – zuverlässig mit Touch UND Maus.
+    const wrap = $("#"+cfg.pref+"Rows", card);
+    $$(".nowgrip", card).forEach(g=>{
+      g.addEventListener("pointerdown", e=>{
+        e.preventDefault();
+        const row = g.closest(".nowrow");
+        const rows = [...wrap.querySelectorAll(".nowrow")];
+        const fromIdx = rows.indexOf(row);
+        const others = rows.filter(r=>r!==row);
+        const mids = others.map(r=>{ const rc=r.getBoundingClientRect(); return rc.top + rc.height/2; });
+        const startY = e.clientY;
+        const h = row.offsetHeight;
+        let toIdx = fromIdx, movedFar = false;
+        row.classList.add("dragging");
+        const move = ev=>{
+          if (Math.abs(ev.clientY - startY) > 6) movedFar = true;
+          row.style.transform = `translateY(${ev.clientY - startY}px)`;
+          toIdx = mids.filter(m=>ev.clientY > m).length;
+          others.forEach((r,i)=>{
+            const orig = i < fromIdx ? i : i + 1;
+            const fin  = i < toIdx  ? i : i + 1;
+            const d = (fin - orig) * h;
+            r.style.transform = d ? `translateY(${d}px)` : "";
+          });
+        };
+        const up = async ()=>{
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+          window.removeEventListener("pointercancel", up);
+          row.classList.remove("dragging");
+          rows.forEach(r=>r.style.transform = "");
+          if (movedFar && toIdx !== fromIdx){
+            const ids = others.map(r=>r.dataset.nid);
+            ids.splice(toIdx, 0, row.dataset.nid);
+            const old = q.get();
+            const order = ids.map(id=>old.find(x=>x.id===id)).filter(Boolean);
+            old.forEach(x=>{ if (!order.includes(x)) order.push(x); });
+            await q.save(order);
+          }
+          renderAll();
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+        window.addEventListener("pointercancel", up);
+      });
+    });
+  };
+  return q;
 }
+
+const NowQ = makeQueue({ key:"nowList", pref:"nowQ", color:"var(--green)",
+  title:"▶️ Now – der Reihe nach",
+  empty:"Deine Reihenfolge für jetzt: ＋ Aufgaben wählen oder unten eigenen Punkt tippen." });
+const MustQ = makeQueue({ key:"mustList", pref:"mustQ", color:"var(--amber)",
+  title:"🎯 Heute unbedingt",
+  empty:"Was MUSS heute passieren? ＋ Aufgaben wählen oder eigenen Punkt tippen." });
 
 // Voller Now-Tab: Karte + Fortschritt/Restzeit
 function renderNow(){
   const el = $("#view-now"); if (!el || S.tab!=="now") return;
-  const list = getNowList().filter(it => !it.taskId || S.tasks.some(t=>t.id===it.taskId && !t.is_archived));
-  const isDone = it => { const t = it.taskId ? S.tasks.find(x=>x.id===it.taskId) : null;
-    return t ? isCompletedToday(t) : !!it.done; };
-  const doneN = list.filter(isDone).length;
+  const list = NowQ.visible();
+  const doneN = list.filter(NowQ.isDone).length;
   const openMin = list.reduce((a,it)=>{
-    if (isDone(it)) return a;
+    if (NowQ.isDone(it)) return a;
     const t = it.taskId ? S.tasks.find(x=>x.id===it.taskId) : null;
     return a + (t ? (t.duration_minutes||0) : 0);
   }, 0);
   el.innerHTML = `
     <div class="homehead" style="margin-top:2px"><h2>▶️ Der Reihe nach</h2>
       <span style="font-size:12px;color:var(--dim);font-weight:700">${list.length?`${doneN}/${list.length} erledigt${openMin?` · noch ~${fmtMin(openMin)}`:""}`:""}</span></div>
-    ${nowCardHtml()}
+    ${NowQ.cardHtml()}
     ${list.length && doneN===list.length ? `<div class="card" style="text-align:center;color:var(--green);font-weight:700">🎉 Alles abgearbeitet – stark!</div>` : ""}`;
-  wireNowCard(el);
+  NowQ.wire(el);
 }
 
 // ============================================================
