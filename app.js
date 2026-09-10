@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 56; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 57; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -1987,10 +1987,36 @@ function blockIco(b){ return b.type==="travel" ? travelIcon(b.title) : (BLOCK_TY
 const minToHM = m => `${pad(Math.floor(m/60))}:${pad(m%60)}`;
 const blocksFor = dk => S.timeBlocks.filter(b=>b.date===dk).sort((a,b)=>a.start_min-b.start_min);
 
+// Wochen-Agenda für schmale Screens: 7 Tageskarten untereinander
+function planWeekAgendaHtml(mon){
+  const bAllDay = b => b.start_min<=0 && (b.end_min>=1439 || b.end_min<=60);
+  let out = "";
+  for (let i=0;i<7;i++){
+    const d = new Date(mon); d.setDate(d.getDate()+i);
+    const dk = dayKey(d);
+    const isToday = dk===dayKey(new Date());
+    const blocks = blocksFor(dk).filter(b=>b.type!=="sleep");
+    out += `<div class="card" style="${isToday?"border-color:var(--accent);":""}padding:11px 14px">
+      <div class="wa-head" data-d="${dk}" role="button" tabindex="0"
+        style="display:flex;justify-content:space-between;align-items:baseline;cursor:pointer${blocks.length?";margin-bottom:4px":""}">
+        <b style="font-size:13.5px${isToday?";color:var(--accent2)":""}">${WEEKDAYS_DE[d.getDay()]} ${d.getDate()}.${isToday?" · heute":""}</b>
+        <span style="font-size:11px;color:var(--dim2)">${blocks.length ? blocks.length+" Termin"+(blocks.length>1?"e":"") : "frei ✨"}</span>
+      </div>
+      ${blocks.map(b=>{ const t = BLOCK_TYPES[b.type]||BLOCK_TYPES.event;
+        return `<div class="planrow tl-allday" data-id="${b.id}" role="button" tabindex="0" style="padding:6px 0">
+          <span class="ptime">${bAllDay(b)?"📅":minToHM(b.start_min)}</span>
+          <span class="pt">${blockIco(b)} ${esc(b.title||t.label)}</span>
+          <span class="pm">${bAllDay(b)?"ganztägig":"bis "+minToHM(b.end_min)}</span></div>`; }).join("")}
+    </div>`;
+  }
+  return out;
+}
+
 function renderPlan(){
   const el = $("#view-plan");
   if (!S.planDate) S.planDate = dayKey(new Date());
   const sel = new Date(S.planDate+"T12:00:00");
+  const pmode = localStorage.getItem("wopPlanMode") || "day"; // Tag/Woche (nur schmale Screens)
 
   // Wochenleiste (Mo–So der Woche des gewählten Tags)
   const mon = new Date(sel); mon.setDate(mon.getDate() - ((mon.getDay()+6)%7));
@@ -2048,15 +2074,34 @@ function renderPlan(){
   tl += `</div>`;
   const empty = blocks.length ? "" : `<div class="section-empty" style="text-align:center;padding-top:10px">Noch keine Blöcke – mit + einen anlegen (Arbeit, Termin, Fahrt …)</div>`;
 
-  el.innerHTML = `<div class="plan-day">` + nav + strip + banner + tl + empty + `<div style="height:8px"></div></div>`
+  // Umschalter Tag/Woche (nur auf schmalen Screens sichtbar – Desktop zeigt eh alles nebeneinander)
+  const seg = `<div class="seg plan-seg" style="margin-bottom:10px">
+    <button data-pv="day" class="${pmode==="day"?"active":""}">Tag</button>
+    <button data-pv="week" class="${pmode==="week"?"active":""}">Woche</button>
+  </div>`;
+  const sun = new Date(mon); sun.setDate(sun.getDate()+6);
+  const weekNav = `<div class="plannav">
+    <button class="iconbtn" id="pl_prev">‹</button>
+    <b>${mon.getDate()}. ${mon.toLocaleDateString("de-DE",{month:"short"})} – ${sun.getDate()}. ${sun.toLocaleDateString("de-DE",{month:"short"})}</b>
+    <div><button class="btn small sec" id="pl_today">Heute</button>
+    <button class="iconbtn" id="pl_next">›</button></div></div>`;
+
+  const mobileContent = pmode==="week"
+    ? weekNav + planWeekAgendaHtml(mon)
+    : nav + strip + banner + tl + empty;
+
+  el.innerHTML = `<div class="plan-day">` + seg + mobileContent + `<div style="height:8px"></div></div>`
     + `<div class="plan-week card">${planWeekHtml()}</div>`
     + `<div class="plan-month"><div class="card">${planMonthHtml()}</div><div class="card">${planUpcomingHtml()}</div></div>`;
   wirePlanPanels(el);
 
+  $$(".plan-seg button", el).forEach(b=>b.onclick=()=>{ localStorage.setItem("wopPlanMode", b.dataset.pv); renderPlan(); });
+  $$(".wa-head", el).forEach(h=>h.onclick=()=>{ S.planDate=h.dataset.d; localStorage.setItem("wopPlanMode","day"); renderPlan(); });
   $$(".weekstrip button", el).forEach(b=>b.onclick=()=>{ S.planDate=b.dataset.d; renderPlan(); });
+  const step = pmode==="week" ? 7 : 1;
   const shift = days => { const d=new Date(S.planDate+"T12:00:00"); d.setDate(d.getDate()+days); S.planDate=dayKey(d); renderPlan(); };
-  $("#pl_prev").onclick = ()=>shift(-1);
-  $("#pl_next").onclick = ()=>shift(1);
+  $("#pl_prev").onclick = ()=>shift(-step);
+  $("#pl_next").onclick = ()=>shift(step);
   $("#pl_today").onclick = ()=>{ S.planDate=dayKey(new Date()); renderPlan(); };
   $$(".tl-block, .tl-allday", el).forEach(x=>x.onclick=()=>{
     const b=S.timeBlocks.find(y=>y.id===x.dataset.id); if(b) openBlockForm(b);
