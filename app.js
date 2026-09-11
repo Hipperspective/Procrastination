@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 57; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 58; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -1737,8 +1737,12 @@ async function renderHome(){
   while (byDay[dayKey(sd)]){ streak++; sd.setDate(sd.getDate()-1); }
 
   // Tagesfortschritt
-  const active = S.tasks.filter(t=>!t.is_archived && isActiveWeekday(t) && startReached(t));
-  const dueOrPlanned = active.filter(t=>isCompletedToday(t) || taskDueState(t).due || (t.scheduled_date&&isToday(t.scheduled_date)));
+  // Heute erledigte Einmal-Aufgaben werden beim Abhaken archiviert – für den Ring zählen sie trotzdem!
+  const dueOrPlanned = S.tasks.filter(t=>{
+    if (t.is_archived) return isCompletedToday(t);
+    if (!isActiveWeekday(t) || !startReached(t)) return false;
+    return isCompletedToday(t) || taskDueState(t).due || (t.scheduled_date && isToday(t.scheduled_date));
+  });
   const doneN = dueOrPlanned.filter(isCompletedToday).length;
   const totalN = dueOrPlanned.length;
   const pct = totalN ? doneN/totalN : 0;
@@ -3170,17 +3174,33 @@ function wirePomoWidget(root){
   if (sp) sp.onclick = ()=>{ setPomoW(null); renderHome(); };
   const p = getPomoW();
   if (!p) return;
+  // Verwaister Timer (App war lange zu / anderes Gerät hat ihn hängen lassen):
+  // >10 Min über der Zeit → still verwerfen, KEINE nachträgliche Belohnung/Pause aus dem Nichts.
+  const totalP = (p.phase==="break" ? 5 : 25) * 60;
+  if ((Date.now()-p.start)/1000 > totalP + 600){
+    setPomoW(null);
+    renderHome();
+    return;
+  }
   _pomoTick = setInterval(async ()=>{
-    const cur = getPomoW(); if (!cur){ clearInterval(_pomoTick); return; }
+    const cur = getPomoW(); if (!cur){ clearInterval(_pomoTick); _pomoTick=null; return; }
     const total = (cur.phase==="break" ? 5 : 25) * 60;
-    const left = Math.max(0, total - Math.floor((Date.now()-cur.start)/1000));
+    const rawLeft = total - Math.floor((Date.now()-cur.start)/1000);
+    const left = Math.max(0, rawLeft);
     const tEl = document.getElementById("pomoTime");
     if (tEl) tEl.textContent = `${pad(Math.floor(left/60))}:${pad(left%60)}`;
-    if (left > 0) return;
+    if (rawLeft > 0) return;
+    // Lange überfällig (Tab war eingefroren): verwerfen statt verspätet zu belohnen
+    if (rawLeft < -600){
+      clearInterval(_pomoTick); _pomoTick = null;
+      setPomoW(null);
+      if (S.tab==="home") renderHome();
+      return;
+    }
     // Übergang macht das Gerät, das gestartet hat (sonst doppelte XP von mehreren Geräten).
     // Fallback: ist das Startgerät weg, übernimmt jedes andere nach 60s.
     const owner = !cur.by || cur.by === deviceId;
-    if (!owner && left > -60) return;
+    if (!owner && rawLeft > -60) return;
     clearInterval(_pomoTick); _pomoTick = null;
     if (cur.phase === "work"){
       await awardPomodoro();               // Runde voll → Zähler + Extra-XP
