@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 58; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 59; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -2311,6 +2311,11 @@ function aiContext(){
   while(byDayC[dayKey(sdd)]){ stk++; sdd.setDate(sdd.getDate()-1); }
   const li = levelInfo();
   const upAbs = getAbsences().filter(a=>a.date>=dk).sort((a,b)=>a.date<b.date?-1:1).slice(0,14);
+  // Datums-Tabelle: LLMs verrechnen sich bei Wochentag→Datum – deshalb explizit auflisten
+  const DAYS_LONG = ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
+  const calLines = [];
+  for (let i=0;i<28;i++){ const d=new Date(); d.setDate(d.getDate()+i);
+    calLines.push(`${DAYS_LONG[d.getDay()]}, ${dayKey(d)}${i===0?"  ← HEUTE":(i===1?"  ← morgen":"")}`); }
   const dataBlock = `LIVE-DATEN (für Auskünfte – nutze diese Zahlen, rate nie):
 - Arbeitszeit ${ws.main} heute: ${fmtMin(ws.todayMin)}${runE?` (läuft gerade seit ${fmtTime(new Date(runE.start_time))} auf Konto ${entryAcc(runE)})`:""} · diese Woche: ${fmtMin(ws.weekMin)}
 - Nebenkonten diesen Monat: ${ws.sides.map(s=>`${s.name} ${fmtMin(s.month)}`).join(" · ")||"keine"}
@@ -2323,7 +2328,12 @@ function aiContext(){
 Heute ist ${today.toLocaleDateString("de-DE",{weekday:"long",day:"2-digit",month:"2-digit",year:"numeric"})} (${dk}), Uhrzeit ${fmtTime(today)}.
 Du kannst per Tools Aufgaben, Termine (Zeitblöcke) und Arbeitszeiten anlegen, Aufgaben abhaken und Termine löschen.
 Du bist außerdem AUSKUNFT: Fragen wie "Was steht morgen an?", "Wie viel hab ich diese Woche gearbeitet?", "Wie ist mein Saldo?", "Was hab ich heute geschafft?" beantwortest du direkt und konkret mit den Zahlen aus LIVE-DATEN, den offenen Aufgaben und dem Kalender unten – ohne Tool-Aufruf. Sei dabei ein echter Assistent: Fasse zusammen, denk mit (z.B. "dein Tag ist eng, die 3 Aufgaben passen zwischen 14 und 16 Uhr") und schlag proaktiv Nächstes vor, wenn es hilft.
-Relative Datumsangaben ("morgen", "Freitag") immer in konkrete Daten umrechnen. Bei fehlender Endzeit eines Termins nimm 1 Stunde.
+DATUMSREGEL (WICHTIG!): Nennt der Nutzer einen Wochentag ("Mittwoch", "nächsten Freitag"), dann lies das Datum AUSSCHLIESSLICH aus der DATUMS-TABELLE unten ab – rechne NIEMALS selbst. Gemeint ist immer das NÄCHSTE zukünftige Vorkommen dieses Wochentags (heute zählt nur bei "heute"). Prüfe vor JEDEM create_appointment/update_appointment/create_task, dass dein Datum in der Tabelle genau bei diesem Wochentag steht. Das Tool-Ergebnis nennt den Wochentag des gespeicherten Datums – übernimm ihn wörtlich in deine Antwort; weicht er vom gewünschten Wochentag ab, korrigiere SOFORT mit update_appointment.
+
+DATUMS-TABELLE (Wochentag → Datum, die nächsten 4 Wochen):
+${calLines.join("\n")}
+
+Relative Datumsangaben ("morgen", "übermorgen") ebenfalls über die Tabelle in konkrete Daten umrechnen. Bei fehlender Endzeit eines Termins nimm 1 Stunde.
 ERINNERUNGEN ("erinnere mich am X um Y an Z"): create_task mit scheduled_date + scheduled_time und is_priority=true. Die App blendet sie automatisch erst ab dem Vortag ein und schickt zur Uhrzeit eine Push-Nachricht. WICHTIG: Eine Erinnerung für HEUTE ist SOFORT sichtbar und der Push kommt heute zur Uhrzeit – sag dann NIE "erscheint ab morgen". Übernimm die Sichtbarkeits-Info wörtlich aus dem Tool-Ergebnis.
 KORREKTUREN: Wenn sich eine Nachricht auf einen gerade angelegten/besprochenen Eintrag bezieht ("bis 23 Uhr", "doch ohne Uhrzeit", "verschieb auf Montag"), IMMER update_appointment/update_task verwenden – NIE einen zweiten Eintrag anlegen.
 Termin ohne Uhrzeit ("nur Hinweis, dass er kommt"): create_appointment OHNE start/end -> ganztägig.
@@ -2342,6 +2352,8 @@ ${week.join("\n")||"(leer)"}`;
 
 async function aiExecTool(name, args){
   const hm = v => { const [h,m]=String(v||"0:0").split(":").map(Number); return h*60+(m||0); };
+  // Wochentag zum Datum – wird in Tool-Ergebnissen mitgegeben, damit der Bot Fehlgriffe sofort merkt
+  const wd = ds => { try { return ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"][new Date(String(ds).slice(0,10)+"T12:00:00").getDay()]; } catch(_){ return "?"; } };
   try {
     if (name==="create_task"){
       const row = { title:args.title, duration_minutes:args.duration_minutes||15,
@@ -2358,7 +2370,7 @@ async function aiExecTool(name, args){
         const prev = new Date(args.scheduled_date+"T00:00:00"); prev.setDate(prev.getDate()-1);
         row.start_date = dayKey(prev) + "T00:00:00";
         const sofort = args.scheduled_date <= dayKey(new Date());
-        info = `Erinnerung "${args.title}" für ${args.scheduled_date}${args.scheduled_time?" "+args.scheduled_time:""} – ${sofort?"ab sofort in der Liste sichtbar":"erscheint ab "+dayKey(prev)}${args.scheduled_time?", Push um "+args.scheduled_time:""}`;
+        info = `Erinnerung "${args.title}" für ${wd(args.scheduled_date)}, ${args.scheduled_date}${args.scheduled_time?" "+args.scheduled_time:""} – ${sofort?"ab sofort in der Liste sichtbar":"erscheint ab "+dayKey(prev)}${args.scheduled_time?", Push um "+args.scheduled_time:""}`;
       }
       const { error } = await sb.from("tasks").insert(row);
       if (error) throw error;
@@ -2372,7 +2384,7 @@ async function aiExecTool(name, args){
           args.date, args.end_date, hm(args.start), hm(args.end||args.start));
         const { error } = await sb.from("time_blocks").insert(rows);
         if (error) throw error;
-        return { ok:true, info:`"${args.title}": ${args.date} ${minToHM(hm(args.start))} bis ${args.end_date} ${minToHM(hm(args.end||args.start))} angelegt` };
+        return { ok:true, info:`"${args.title}": ${wd(args.date)}, ${args.date} ${minToHM(hm(args.start))} bis ${wd(args.end_date)}, ${args.end_date} ${minToHM(hm(args.end||args.start))} angelegt` };
       }
       const row = { date:args.date, title:args.title, type:args.type||"event",
         start_min: allDay ? 0 : hm(args.start), end_min: allDay ? 1439 : hm(args.end||args.start),
@@ -2380,7 +2392,7 @@ async function aiExecTool(name, args){
       if (!allDay && row.end_min<=row.start_min) row.end_min = row.start_min+60;
       const { error } = await sb.from("time_blocks").insert(row);
       if (error) throw error;
-      return { ok:true, info: allDay ? `Termin "${args.title}" am ${args.date} (ganztägig)` : `Termin "${args.title}" am ${args.date} ${minToHM(row.start_min)}–${minToHM(row.end_min)}` };
+      return { ok:true, info: allDay ? `Termin "${args.title}" am ${wd(args.date)}, ${args.date} (ganztägig)` : `Termin "${args.title}" am ${wd(args.date)}, ${args.date} ${minToHM(row.start_min)}–${minToHM(row.end_min)}` };
     }
     if (name==="update_appointment"){
       const q = (args.title||"").toLowerCase();
@@ -2400,7 +2412,7 @@ async function aiExecTool(name, args){
       const { error } = await sb.from("time_blocks").update(upd).eq("id", b.id);
       if (error) throw error;
       const s = upd.start_min ?? b.start_min, e2 = upd.end_min ?? b.end_min;
-      return { ok:true, info:`Termin "${upd.title||b.title}" geändert: ${upd.date||b.date} ${args.all_day?"(ganztägig)":minToHM(s)+"–"+minToHM(e2)}` };
+      return { ok:true, info:`Termin "${upd.title||b.title}" geändert: ${wd(upd.date||b.date)}, ${upd.date||b.date} ${args.all_day?"(ganztägig)":minToHM(s)+"–"+minToHM(e2)}` };
     }
     if (name==="update_task"){
       const q = (args.title||"").toLowerCase();
