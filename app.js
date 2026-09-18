@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 59; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 60; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -901,7 +901,7 @@ function renderWork(){
   el.innerHTML = accSeg + clockHtml + summaryHtml + absCardHtml +
     (isMain ? `<div style="display:flex;gap:8px;margin-bottom:4px">
       <button class="btn sec" id="w_settings" style="flex:1">⚙️ Sollzeit (${mode==="week"?"Woche":"Monat"})</button>
-      <button class="btn sec" id="w_abs" style="flex:1">🏖 Urlaub eintragen</button></div>` : "") +
+      <button class="btn sec" id="w_abs" style="flex:1">🏖🤒 Urlaub / Krank</button></div>` : "") +
     listHtml + histHtml;
 
   $$("#w_accseg button", el).forEach(bt=>bt.onclick = ()=>{ S.workAccount = bt.dataset.a; S.wtExpand=null; renderWork(); });
@@ -1044,7 +1044,7 @@ function openAbsenceForm(){
       <input type="checkbox" id="ab_wd" checked style="width:auto;margin:0"> Nur Werktage (Mo–Fr)</label>
     <div style="height:18px"></div>
     <button class="btn" id="ab_save">Eintragen</button>
-    <div style="font-size:12px;color:var(--dim);margin-top:10px">Jeder Tag zählt als Gutschrift aufs Soll – so rutscht der Saldo im Urlaub nicht ins Minus.</div>
+    <div style="font-size:12px;color:var(--dim);margin-top:10px">Jeder Tag zählt als Gutschrift aufs Soll – so rutscht der Saldo bei Urlaub oder Krankenstand nicht ins Minus.</div>
   `);
   let kind = "urlaub";
   $$("#ab_kind button").forEach(b=>b.onclick=()=>{ kind=b.dataset.v;
