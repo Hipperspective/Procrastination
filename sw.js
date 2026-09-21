@@ -1,5 +1,5 @@
 // Minimaler Service Worker: cached die App-Shell, Daten kommen immer live von Supabase.
-const CACHE = "wop-shell-v60";
+const CACHE = "wop-shell-v61";
 const SHELL = ["./", "index.html", "app.js", "manifest.json", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", e => {
@@ -50,6 +50,11 @@ self.addEventListener("notificationclick", e => {
   if ((e.action === "snooze60" || e.action === "snoozeTomorrow") && e.notification.data && e.notification.data.snoozeUrl) {
     const mode = e.action === "snooze60" ? "hour" : "tomorrow";
     e.waitUntil(fetch(e.notification.data.snoozeUrl + "&mode=" + mode, { method: "POST" }).catch(() => {}));
+    return;
+  }
+  // "🔴 Ausstempeln"-Button im Stempel-Check: Arbeitszeit direkt beenden
+  if (e.action === "clockout" && e.notification.data && e.notification.data.clockoutUrl) {
+    e.waitUntil(fetch(e.notification.data.clockoutUrl, { method: "POST" }).catch(() => {}));
     return;
   }
   e.waitUntil(clients.matchAll({ type: "window", includeUncontrolled: true }).then(list => {

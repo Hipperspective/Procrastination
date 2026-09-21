@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 60; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 61; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -2016,11 +2016,30 @@ function planWeekAgendaHtml(mon){
   return out;
 }
 
+// Monatsansicht (voll): Raster mit Termin-Chips pro Tag
+function planMonthFullHtml(sel){
+  const y = sel.getFullYear(), m = sel.getMonth();
+  const dim = new Date(y, m+1, 0).getDate();
+  const lead = (new Date(y, m, 1).getDay()+6)%7;
+  const tk = dayKey(new Date());
+  let g = `<div class="mgrid">` + ["Mo","Di","Mi","Do","Fr","Sa","So"].map(w=>`<div class="mg-wd">${w}</div>`).join("");
+  for (let i=0;i<lead;i++) g += `<div></div>`;
+  for (let day=1; day<=dim; day++){
+    const dk = dayKey(new Date(y, m, day));
+    const bl = blocksFor(dk).filter(b=>b.type!=="sleep");
+    const chips = bl.slice(0,3).map(b=>{ const c = blockColor(b);
+      return `<div class="mg-chip" style="background:${c}22;border-left-color:${c}">${blockIco(b)} ${esc(b.title||"Termin")}</div>`; }).join("");
+    g += `<div class="mg-cell${dk===tk?" today":""}${dk===S.planDate?" sel":""}" data-mfd="${dk}" role="button" tabindex="0">
+      <div class="dnum">${day}</div>${chips}${bl.length>3?`<div class="mg-more">+${bl.length-3} weitere</div>`:""}</div>`;
+  }
+  return g + `</div>`;
+}
+
 function renderPlan(){
   const el = $("#view-plan");
   if (!S.planDate) S.planDate = dayKey(new Date());
   const sel = new Date(S.planDate+"T12:00:00");
-  const pmode = localStorage.getItem("wopPlanMode") || "day"; // Tag/Woche (nur schmale Screens)
+  const pmode = localStorage.getItem("wopPlanMode") || "day"; // Tag/Woche/Monat
 
   // Wochenleiste (Mo–So der Woche des gewählten Tags)
   const mon = new Date(sel); mon.setDate(mon.getDate() - ((mon.getDay()+6)%7));
@@ -2078,10 +2097,11 @@ function renderPlan(){
   tl += `</div>`;
   const empty = blocks.length ? "" : `<div class="section-empty" style="text-align:center;padding-top:10px">Noch keine Blöcke – mit + einen anlegen (Arbeit, Termin, Fahrt …)</div>`;
 
-  // Umschalter Tag/Woche (nur auf schmalen Screens sichtbar – Desktop zeigt eh alles nebeneinander)
+  // Umschalter Tag/Woche/Monat
   const seg = `<div class="seg plan-seg" style="margin-bottom:10px">
     <button data-pv="day" class="${pmode==="day"?"active":""}">Tag</button>
     <button data-pv="week" class="${pmode==="week"?"active":""}">Woche</button>
+    <button data-pv="month" class="${pmode==="month"?"active":""}">Monat</button>
   </div>`;
   const sun = new Date(mon); sun.setDate(sun.getDate()+6);
   const weekNav = `<div class="plannav">
@@ -2090,10 +2110,19 @@ function renderPlan(){
     <div><button class="btn small sec" id="pl_today">Heute</button>
     <button class="iconbtn" id="pl_next">›</button></div></div>`;
 
-  const mobileContent = pmode==="week"
+  const monthNav = `<div class="plannav">
+    <button class="iconbtn" id="pl_prev">‹</button>
+    <b style="text-transform:capitalize">${sel.toLocaleDateString("de-DE",{month:"long",year:"numeric"})}</b>
+    <div><button class="btn small sec" id="pl_today">Heute</button>
+    <button class="iconbtn" id="pl_next">›</button></div></div>`;
+
+  const mobileContent = pmode==="month"
+    ? monthNav + planMonthFullHtml(sel)
+    : pmode==="week"
     ? weekNav + planWeekAgendaHtml(mon)
     : nav + strip + banner + tl + empty;
 
+  el.classList.toggle("pfull", pmode!=="day");
   el.innerHTML = `<div class="plan-day">` + seg + mobileContent + `<div style="height:8px"></div></div>`
     + `<div class="plan-week card">${planWeekHtml()}</div>`
     + `<div class="plan-month"><div class="card">${planMonthHtml()}</div><div class="card">${planUpcomingHtml()}</div></div>`;
@@ -2102,10 +2131,13 @@ function renderPlan(){
   $$(".plan-seg button", el).forEach(b=>b.onclick=()=>{ localStorage.setItem("wopPlanMode", b.dataset.pv); renderPlan(); });
   $$(".wa-head", el).forEach(h=>h.onclick=()=>{ S.planDate=h.dataset.d; localStorage.setItem("wopPlanMode","day"); renderPlan(); });
   $$(".weekstrip button", el).forEach(b=>b.onclick=()=>{ S.planDate=b.dataset.d; renderPlan(); });
-  const step = pmode==="week" ? 7 : 1;
-  const shift = days => { const d=new Date(S.planDate+"T12:00:00"); d.setDate(d.getDate()+days); S.planDate=dayKey(d); renderPlan(); };
-  $("#pl_prev").onclick = ()=>shift(-step);
-  $("#pl_next").onclick = ()=>shift(step);
+  $$("[data-mfd]", el).forEach(c=>c.onclick=()=>{ S.planDate=c.dataset.mfd; localStorage.setItem("wopPlanMode","day"); renderPlan(); });
+  const shift = n => { const d=new Date(S.planDate+"T12:00:00");
+    if (pmode==="month") d.setMonth(d.getMonth()+n);
+    else d.setDate(d.getDate() + n*(pmode==="week"?7:1));
+    S.planDate=dayKey(d); renderPlan(); };
+  $("#pl_prev").onclick = ()=>shift(-1);
+  $("#pl_next").onclick = ()=>shift(1);
   $("#pl_today").onclick = ()=>{ S.planDate=dayKey(new Date()); renderPlan(); };
   $$(".tl-block, .tl-allday", el).forEach(x=>x.onclick=()=>{
     const b=S.timeBlocks.find(y=>y.id===x.dataset.id); if(b) openBlockForm(b);
@@ -2804,6 +2836,7 @@ async function renderNotifySettings(){
   const weeklyMin = getSetting("notifyWeeklyMin", 1080);
   const briefOn = getSetting("notifyBriefEnabled", true);
   const briefMin = getSetting("notifyBriefMin", 420);
+  const workChkOn = getSetting("notifyWorkCheck", true);
   const hmv = m => `${pad(Math.floor(m/60))}:${pad(m%60)}`;
   const routines = S.locations.filter(l=>l.is_routine);
 
@@ -2832,6 +2865,8 @@ async function renderNotifySettings(){
     <div class="mrow" ${weeklyOn?"":'style="display:none"'} id="n_weeklyrow">
       <div><label>Uhrzeit (Sonntag)</label><input type="time" id="n_weeklytime" value="${hmv(weeklyMin)}"></div><div></div>
     </div>
+    <div class="switch"><label>⏱ Stempel-Check (stündlich: „Arbeitest du noch?“)</label>
+      <button class="toggle ${workChkOn?"on":""}" id="n_workchk"></button></div>
     ${ routines.length ? `<label style="margin-top:14px">Routine-Erinnerungen</label>` + routines.map(l=>`
       <div class="switch" data-loc="${l.id}">
         <label>${routineMeta(l.name).ico} ${esc(l.name)}</label>
@@ -2857,6 +2892,7 @@ async function renderNotifySettings(){
   const btI = $("#n_brieftime");
   if (btI) btI.onchange = ()=>saveSetting("notifyBriefMin", hmToMin(btI.value));
   $("#n_weekly").onclick = async ()=>{ await saveSetting("notifyWeeklyEnabled", !weeklyOn); renderNotifySettings(); };
+  $("#n_workchk").onclick = async ()=>{ await saveSetting("notifyWorkCheck", !workChkOn); renderNotifySettings(); };
   const wtI = $("#n_weeklytime");
   if (wtI) wtI.onchange = ()=>saveSetting("notifyWeeklyMin", hmToMin(wtI.value));
   const ld = $("#n_lead");
