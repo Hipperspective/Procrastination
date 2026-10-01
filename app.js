@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 62; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 63; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -545,9 +545,9 @@ $("#modalBg").addEventListener("click", e=>{ if(e.target.id==="modalBg") closeMo
 function switchTab(tab){
   S.tab = tab;
   $$(".tabbar button").forEach(b=>b.classList.toggle("active", b.dataset.tab===tab));
-  ["home","tasks","plan","now","work","stats","archive"].forEach(v=>$("#view-"+v).classList.toggle("hidden", v!==tab));
-  $("#pageTitle").textContent = {home:"Heute",tasks:"Aufgaben",plan:"Plan",now:"Now",work:"Arbeitszeit",stats:"Statistik",archive:"Archiv"}[tab];
-  $("#fab").classList.toggle("hidden", tab==="stats" || tab==="archive");
+  ["home","tasks","plan","now","fit","work","stats","archive"].forEach(v=>$("#view-"+v).classList.toggle("hidden", v!==tab));
+  $("#pageTitle").textContent = {home:"Heute",tasks:"Aufgaben",plan:"Plan",now:"Now",fit:"Workout",work:"Arbeitszeit",stats:"Statistik",archive:"Archiv"}[tab];
+  $("#fab").classList.toggle("hidden", tab==="stats" || tab==="archive" || tab==="fit");
   renderAll();
 }
 
@@ -555,6 +555,7 @@ function renderAll(){
   if (S.tab==="home") renderHome();
   if (S.tab==="plan") renderPlan();
   if (S.tab==="now") renderNow();
+  if (S.tab==="fit") renderFit();
   if (S.tab==="tasks") renderTasks();
   if (S.tab==="work") renderWork();
   if (S.tab==="stats") renderStats();
@@ -3264,31 +3265,45 @@ function wirePomoWidget(root){
 }
 
 // ============================================================
-// 💪 Workout-Coach: tägliche 10-Minuten-Einheiten, 3 rotierende Tage
+// 💪 Workout-Tab: 10-Minuten-Coach mit Intro, Körper-Grafik,
+// geführtem Modus (Timer + Set-Counter) und Feedback-Levels
 // Equipment: Klimmzugstange, Matte, 12-kg-Kettlebell
 // ============================================================
 const WK_DAYS = {
   A: { name:"Push & Beine", ico:"🦵", ex:[
-    { n:"Goblet Squats (KB vor der Brust)", m:["Beine","Po","Core"], base:8, inc:2, unit:"Wdh", sets:3 },
-    { n:"Liegestütze", m:["Brust","Schulter","Trizeps"], base:6, inc:2, unit:"Wdh", sets:3, tip:"Zu schwer? Auf den Knien – zählt genauso." },
-    { n:"KB Press über Kopf (je Seite)", m:["Schulter","Trizeps","Core"], base:4, inc:1, unit:"Wdh", sets:2, tip:"Langsam & kontrolliert, Bauch fest." },
-    { n:"Plank", m:["Core"], base:20, inc:10, unit:"Sek", sets:2 },
+    { n:"Goblet Squats", m:["Beine","Po","Core"], base:8, inc:2, unit:"Wdh", sets:3,
+      how:"Kettlebell mit beiden Händen vor der Brust halten, Füße schulterbreit. Tief in die Hocke (Ellbogen innen an den Knien vorbei), Rücken gerade, über die Fersen wieder hoch." },
+    { n:"Liegestütze", m:["Brust","Schulter","Trizeps","Core"], base:6, inc:2, unit:"Wdh", sets:3,
+      how:"Hände unter den Schultern, Körper eine Linie. Brust Richtung Boden, kontrolliert hochdrücken. Zu schwer? Auf den Knien – zählt genauso." },
+    { n:"KB Press über Kopf", m:["Schulter","Trizeps","Core"], base:4, inc:1, unit:"Wdh/Seite", sets:2,
+      how:"Kettlebell in Schulterhöhe (Rack-Position), Bauch fest, Gewicht gerade über den Kopf drücken bis der Arm gestreckt ist. Langsam ablassen. Seite wechseln." },
+    { n:"Plank", m:["Core","Schulter"], base:20, inc:10, unit:"Sek", sets:2,
+      how:"Unterarme auf die Matte, Körper eine Linie von Kopf bis Ferse. Bauch & Po fest – nicht durchhängen, Blick zum Boden." },
   ]},
   B: { name:"Pull & Klimmzug-Aufbau", ico:"🆙", ex:[
-    { n:"Negativ-Klimmzüge", m:["Rücken","Bizeps"], base:3, inc:1, unit:"Wdh", sets:3, tip:"Hochspringen, 3–5 Sek langsam ablassen. DER Weg zum ersten Klimmzug." },
-    { n:"KB Rows vorgebeugt (je Seite)", m:["Rücken","Bizeps"], base:8, inc:2, unit:"Wdh", sets:3 },
-    { n:"Hängen an der Stange", m:["Griffkraft","Schulter"], base:15, inc:5, unit:"Sek", sets:2, tip:"Schultern aktiv nach unten ziehen." },
-    { n:"Superman-Hold", m:["Unterer Rücken","Po"], base:20, inc:5, unit:"Sek", sets:2 },
+    { n:"Negativ-Klimmzüge", m:["Rücken","Bizeps","Griffkraft"], base:3, inc:1, unit:"Wdh", sets:3,
+      how:"Hochspringen (oder Stuhl), Kinn über der Stange starten, dann 3–5 Sekunden LANGSAM ablassen bis die Arme gestreckt sind. DER Weg zum ersten echten Klimmzug." },
+    { n:"KB Rows vorgebeugt", m:["Rücken","Bizeps"], base:8, inc:2, unit:"Wdh/Seite", sets:3,
+      how:"Oberkörper vorbeugen, eine Hand aufstützen (Knie/Bank). Kettlebell zur Hüfte ziehen, Ellbogen nah am Körper, Schulterblatt zusammenziehen. Langsam ablassen." },
+    { n:"Hängen an der Stange", m:["Griffkraft","Schulter","Rücken"], base:15, inc:5, unit:"Sek", sets:2,
+      how:"Mit beiden Händen an die Stange hängen, Arme gestreckt. Schultern aktiv nach unten ziehen (nicht in den Ohren). Baut Griffkraft fürs Klimmzug-Ziel." },
+    { n:"Superman-Hold", m:["Unterer Rücken","Po"], base:20, inc:5, unit:"Sek", sets:2,
+      how:"Bäuchlings auf die Matte, Arme nach vorn. Arme, Brust und Beine gleichzeitig anheben und halten. Blick zum Boden, ruhig atmen." },
   ]},
   C: { name:"Swings & Core", ico:"🔥", ex:[
-    { n:"KB Swings", m:["Po","Beine","Rücken","Ausdauer"], base:10, inc:3, unit:"Wdh", sets:4, tip:"Hüfte schnappt – die Arme schwingen nur mit." },
-    { n:"KB Deadlifts", m:["Beine","Po","Unterer Rücken"], base:8, inc:2, unit:"Wdh", sets:2, tip:"Rücken gerade, Gewicht nah am Körper." },
-    { n:"Russian Twists (KB halten)", m:["Core"], base:10, inc:4, unit:"Wdh", sets:2 },
-    { n:"Mountain Climbers", m:["Core","Ausdauer"], base:20, inc:6, unit:"Wdh", sets:2 },
+    { n:"KB Swings", m:["Po","Beine","Rücken","Ausdauer"], base:10, inc:3, unit:"Wdh", sets:4,
+      how:"Füße schulterbreit, Kettlebell mit beiden Händen. Hüfte nach hinten schieben (kein Squat!), dann Hüfte explosiv nach vorn schnappen – der Schwung hebt die KB auf Brusthöhe. Arme bleiben locker." },
+    { n:"KB Deadlifts", m:["Beine","Po","Unterer Rücken"], base:8, inc:2, unit:"Wdh", sets:2,
+      how:"Kettlebell zwischen den Füßen. Hüfte nach hinten, Rücken gerade, KB greifen und über die Fersen aufstehen – Hüfte streckt nach vorn. Kein runder Rücken!" },
+    { n:"Russian Twists", m:["Core"], base:10, inc:4, unit:"Wdh/Seite", sets:2,
+      how:"Auf der Matte sitzen, Knie angewinkelt, Oberkörper leicht zurücklehnen. Kettlebell (oder ohne) mit beiden Händen kontrolliert von Seite zu Seite drehen." },
+    { n:"Mountain Climbers", m:["Core","Ausdauer","Schulter"], base:20, inc:6, unit:"Wdh", sets:2,
+      how:"Liegestützposition, Knie abwechselnd zügig Richtung Brust ziehen. Hüfte bleibt unten, Tempo so, dass die Form sauber bleibt." },
   ]},
 };
 const WK_ORDER = ["A","B","C"];
 const WK_MAXLVL = 12;
+const WK_REST_SET = 45, WK_REST_EX = 60; // Sekunden Pause
 const WK_QUOTES = [
   "Stark! Der schwerste Teil war anfangen. 💪",
   "10 Minuten, die dein Zukunfts-Ich feiert. 🙌",
@@ -3315,69 +3330,288 @@ function wkStreak(){
   while (days.has(dayKey(d))){ n++; d.setDate(d.getDate()-1); }
   return n;
 }
+
+// ---- Körper-Grafik: Vorder- & Rückseite, aktive Muskelgruppen leuchten ----
+const WK_BODY = {
+  front: [
+    ["Schulter",'<circle cx="29" cy="36" r="6.5"/><circle cx="61" cy="36" r="6.5"/>'],
+    ["Brust",'<ellipse cx="38" cy="48" rx="8" ry="6"/><ellipse cx="52" cy="48" rx="8" ry="6"/>'],
+    ["Bizeps",'<ellipse cx="23" cy="55" rx="4.5" ry="9"/><ellipse cx="67" cy="55" rx="4.5" ry="9"/>'],
+    ["Griffkraft",'<ellipse cx="19" cy="77" rx="4" ry="9"/><ellipse cx="71" cy="77" rx="4" ry="9"/>'],
+    ["Core",'<rect x="37" y="57" width="16" height="26" rx="5"/>'],
+    ["Beine",'<ellipse cx="38" cy="112" rx="7" ry="19"/><ellipse cx="52" cy="112" rx="7" ry="19"/>'],
+    ["Ausdauer",'<path d="M45 43.5 l2.8 -2.8 a2.4 2.4 0 0 1 3.4 3.4 L45 50.3 38.8 44.1 a2.4 2.4 0 0 1 3.4 -3.4 Z"/>'],
+  ],
+  back: [
+    ["Schulter",'<circle cx="29" cy="36" r="6.5"/><circle cx="61" cy="36" r="6.5"/>'],
+    ["Rücken",'<ellipse cx="38" cy="48" rx="8" ry="11"/><ellipse cx="52" cy="48" rx="8" ry="11"/>'],
+    ["Trizeps",'<ellipse cx="23" cy="55" rx="4.5" ry="9"/><ellipse cx="67" cy="55" rx="4.5" ry="9"/>'],
+    ["Griffkraft",'<ellipse cx="19" cy="77" rx="4" ry="9"/><ellipse cx="71" cy="77" rx="4" ry="9"/>'],
+    ["Unterer Rücken",'<rect x="37" y="62" width="16" height="10" rx="4"/>'],
+    ["Po",'<ellipse cx="39" cy="89" rx="7" ry="7"/><ellipse cx="51" cy="89" rx="7" ry="7"/>'],
+    ["Beine",'<ellipse cx="38" cy="114" rx="7" ry="17"/><ellipse cx="52" cy="114" rx="7" ry="17"/><ellipse cx="38" cy="148" rx="5" ry="11"/><ellipse cx="52" cy="148" rx="5" ry="11"/>'],
+  ],
+};
+function wkFigure(side, groups){
+  const act = new Set(groups);
+  const shapes = WK_BODY[side].map(([g, el])=>
+    `<g fill="${act.has(g)?"var(--accent)":"var(--line)"}" opacity="${act.has(g)?"0.95":"0.45"}">${el}</g>`).join("");
+  return `
+    <g opacity="0.5" stroke="var(--dim2)" fill="none" stroke-width="2">
+      <circle cx="45" cy="14" r="8.5"/>
+      <path d="M38 24 h14 M33 29 h24 l-2.5 56 h-19 Z" stroke-linejoin="round"/>
+      <path d="M31 33 L22 48 L19 68 M59 33 L68 48 L71 68" stroke-linecap="round"/>
+      <path d="M40 86 L37 128 L37 158 M50 86 L53 128 L53 158" stroke-linecap="round"/>
+    </g>${shapes}`;
+}
+function bodySvg(groups, h=150){
+  return `<svg viewBox="0 0 200 168" style="height:${h}px;max-width:100%" aria-hidden="true">
+    <g transform="scale(0.95)">${wkFigure("front", groups)}</g>
+    <g transform="translate(110,0) scale(0.95)">${wkFigure("back", groups)}</g>
+    <text x="43" y="166" font-size="9" fill="var(--dim2)" text-anchor="middle">vorne</text>
+    <text x="152" y="166" font-size="9" fill="var(--dim2)" text-anchor="middle">hinten</text>
+  </svg>`;
+}
+
+// ---- Home-Karte: kleiner Teaser, öffnet den Workout-Tab ----
 function workoutCardHtml(){
   const st = wkState(), day = wkNextDay(), W = WK_DAYS[day], stk = wkStreak();
   const inner = wkDoneToday()
     ? `<div style="font-size:13px;color:var(--green);font-weight:700">✅ Heute erledigt${stk>1?` · Serie: ${stk} Tage 🔥`:""}</div>`
-    : `<div style="font-size:12.5px;color:var(--dim);margin-bottom:8px">Heute: <b style="color:var(--text)">${W.ico} Tag ${day} – ${W.name}</b> · Level ${st.lvl[day]}${stk>1?` · Serie: ${stk} Tage 🔥`:""}</div>
-       <button class="btn small" id="wkStart" style="width:100%">▶ 10 Min starten</button>`;
-  return `<div class="card" id="wkCard" style="border-left:4px solid var(--green)">
+    : `<div style="font-size:12.5px;color:var(--dim);margin-bottom:8px">Heute: <b style="color:var(--text)">${W.ico} ${W.name}</b> · Level ${st.lvl[day]}${stk>1?` · 🔥 ${stk}`:""}</div>
+       <button class="btn small" id="wkGo" style="width:100%">💪 Zum Workout</button>`;
+  return `<div class="card" id="wkCard" role="button" tabindex="0" style="border-left:4px solid var(--green);cursor:pointer">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <b style="font-size:13.5px">💪 Workout</b>
-      <span style="display:flex;gap:10px"><a id="wkStats" style="cursor:pointer;font-size:12px">📈</a><a id="wkFood" style="cursor:pointer;font-size:12px">🍗</a></span>
+      <span style="font-size:11.5px;color:var(--dim);font-weight:700">${st.log.length?st.log.length+" gesamt":""}</span>
     </div>${inner}</div>`;
 }
 function wireWorkout(root){
-  const s = $("#wkStart", root); if (s) s.onclick = openWorkoutModal;
-  const st = $("#wkStats", root); if (st) st.onclick = openWorkoutStats;
-  const f = $("#wkFood", root); if (f) f.onclick = openWorkoutFood;
+  const c = $("#wkCard", root); if (c) c.onclick = ()=>switchTab("fit");
 }
-function openWorkoutModal(){
-  const stt = wkState(), day = wkNextDay(), W = WK_DAYS[day], lvl = stt.lvl[day];
-  openModal(`
-    <h3>${W.ico} Tag ${day} – ${W.name} <span style="font-size:12px;color:var(--dim);font-weight:600">Level ${lvl}</span></h3>
-    <div style="font-size:12px;color:var(--dim);margin-bottom:10px">~10 Minuten · zwischen den Übungen 30–60 Sek Pause. Technik vor Tempo!</div>
+
+// ---- Workout-Tab ----
+let _fitTick = null;
+function fitStopTick(){ clearInterval(_fitTick); _fitTick = null; }
+
+function renderFit(){
+  const el = $("#view-fit");
+  fitStopTick();
+  if (S.fitRun) return renderFitSession(el);
+
+  const st = wkState(), day = wkNextDay(), W = WK_DAYS[day], lvl = st.lvl[day], stk = wkStreak();
+  const allGroups = [...new Set(W.ex.flatMap(e=>e.m))];
+  // Wochenleiste: letzte 7 Tage
+  const days = new Set(st.log.map(e=>e.d));
+  let week = "";
+  for (let i=6;i>=0;i--){ const d=new Date(); d.setDate(d.getDate()-i); const k=dayKey(d);
+    week += `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;flex:1">
+      <div style="width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;
+        background:${days.has(k)?"var(--green)":"var(--card2)"};border:1px solid ${days.has(k)?"var(--green)":"var(--line)"};
+        color:${days.has(k)?"#fff":"var(--dim2)"}">${days.has(k)?"✓":""}</div>
+      <span style="font-size:9px;color:var(--dim2)">${WEEKDAYS_DE[d.getDay()]}</span></div>`;
+  }
+  const done = wkDoneToday();
+  el.innerHTML = `<div style="max-width:560px;margin:0 auto">
+    <div class="card" style="border-left:4px solid var(--green)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+        <div>
+          <div style="font-size:11px;color:var(--dim);font-weight:800;text-transform:uppercase;letter-spacing:.05em">Heute dran</div>
+          <div style="font-size:20px;font-weight:800;margin-top:2px">${W.ico} ${W.name}</div>
+          <div style="font-size:12px;color:var(--dim);margin-top:3px">Tag ${day} von 3 · Level ${lvl}/${WK_MAXLVL} · ~10 Min${stk>0?` · Serie: ${stk} 🔥`:""}</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="iconbtn" id="fitStats" title="Fortschritt" style="font-size:16px">📈</button>
+          <button class="iconbtn" id="fitFood" title="Ernährung & Creatin" style="font-size:16px">🍗</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:4px;margin:14px 0 4px">${week}</div>
+    </div>
+
+    <div class="card" style="text-align:center">
+      <div style="font-size:11px;color:var(--dim);font-weight:800;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Heute im Fokus</div>
+      ${bodySvg(allGroups, 165)}
+      <div style="display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin-top:8px">
+        ${allGroups.map(g=>`<span style="font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:99px;background:var(--accent)22;color:var(--accent2);border:1px solid var(--accent)44">${g}</span>`).join("")}
+      </div>
+    </div>
+
+    <h2 style="margin-top:14px">Die ${W.ex.length} Übungen</h2>
     ${W.ex.map((ex,i)=>`
-      <div class="wt-entry" style="cursor:pointer;align-items:flex-start" data-wkex="${i}">
-        <div style="display:flex;gap:9px;align-items:flex-start">
-          <span class="wkchk" data-i="${i}" style="font-size:17px;line-height:1.3">⬜️</span>
-          <div><div class="t">${ex.n}</div>
-          <div class="n">${ex.sets} × ${wkReps(ex,lvl)} ${ex.unit} · <span style="opacity:.8">${ex.m.join(" · ")}</span></div>
-          ${ex.tip?`<div class="n" style="color:var(--accent2)">💡 ${ex.tip}</div>`:""}</div>
+      <div class="card" style="padding:12px 14px;cursor:pointer" data-fitex="${i}">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <div>
+            <b style="font-size:14px">${i+1}. ${ex.n}</b>
+            <div style="font-size:12px;color:var(--dim);margin-top:2px">${ex.sets} Sätze × ${wkReps(ex,lvl)} ${ex.unit}</div>
+          </div>
+          <span style="color:var(--dim2);font-size:13px" id="fitexArr${i}">▸</span>
+        </div>
+        <div class="hidden" id="fitexDet${i}" style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
+          <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
+            <div style="flex:0 0 auto">${bodySvg(ex.m, 108)}</div>
+            <div style="flex:1;min-width:170px">
+              <div style="font-size:12.5px;line-height:1.5">${ex.how}</div>
+              <div style="font-size:11px;color:var(--accent2);font-weight:700;margin-top:6px">${ex.m.join(" · ")}</div>
+            </div>
+          </div>
         </div>
       </div>`).join("")}
-    <label style="margin-top:14px">Wie war's? (passt den Coach an)</label>
-    <div style="display:flex;gap:8px;margin-top:6px">
-      <button class="btn sec" data-wkfb="hard" style="flex:1">😮‍💨 Zu schwer</button>
-      <button class="btn" data-wkfb="ok" style="flex:1">👌 Passt</button>
-      <button class="btn sec" data-wkfb="easy" style="flex:1">🥱 Zu leicht</button>
+
+    ${done
+      ? `<div class="card" style="text-align:center;border-color:var(--green)">
+          <div style="font-size:15px;font-weight:800;color:var(--green)">✅ Heute schon trainiert – stark!</div>
+          <div style="font-size:12px;color:var(--dim);margin-top:4px">Morgen: ${WK_DAYS[WK_ORDER[(WK_ORDER.indexOf(day))%3]].ico} Tag ${day} wartet. Nochmal geht natürlich auch:</div>
+          <button class="btn sec" id="fitStart" style="margin-top:10px">🔁 Extra-Runde starten</button>
+        </div>`
+      : `<button class="btn" id="fitStart" style="width:100%;margin-top:6px;padding:15px;font-size:16px">▶ Workout starten</button>`}
+    <div style="height:10px"></div>
+  </div>`;
+
+  W.ex.forEach((_,i)=>{
+    const row = $(`[data-fitex="${i}"]`, el);
+    row.onclick = ()=>{
+      const det = $(`#fitexDet${i}`, el), arr = $(`#fitexArr${i}`, el);
+      det.classList.toggle("hidden");
+      arr.textContent = det.classList.contains("hidden") ? "▸" : "▾";
+    };
+  });
+  $("#fitStart", el).onclick = ()=>{
+    S.fitRun = { day, lvl, ex:0, set:1, mode: W.ex[0].unit.startsWith("Sek") ? "ready" : "work", t0:0, dur:0 };
+    renderFit();
+  };
+  $("#fitStats", el).onclick = openWorkoutStats;
+  $("#fitFood", el).onclick = openWorkoutFood;
+}
+
+// ---- Geführter Modus: Übung für Übung, Satz für Satz, mit Timern ----
+function renderFitSession(el){
+  const r = S.fitRun, W = WK_DAYS[r.day], ex = W.ex[r.ex];
+  const totalSets = W.ex.reduce((a,e)=>a+e.sets,0);
+  const doneSets = W.ex.slice(0,r.ex).reduce((a,e)=>a+e.sets,0) + (r.set-1);
+  const pct = Math.round(doneSets/totalSets*100);
+  const reps = wkReps(ex, r.lvl);
+  const isTimed = ex.unit.startsWith("Sek");
+
+  if (r.mode === "feedback"){
+    el.innerHTML = `<div style="max-width:560px;margin:0 auto">
+      <div class="card" style="text-align:center;padding:26px 18px">
+        <div style="font-size:40px">🎉</div>
+        <div style="font-size:19px;font-weight:800;margin-top:6px">Workout geschafft!</div>
+        <div style="font-size:12.5px;color:var(--dim);margin-top:4px">${W.ico} ${W.name} · Level ${r.lvl} · ${totalSets} Sätze</div>
+        <label style="margin-top:20px;display:block">Wie war's? Dein Coach passt das nächste Mal an:</label>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn sec" data-wkfb="hard" style="flex:1">😮‍💨 Zu schwer</button>
+          <button class="btn" data-wkfb="ok" style="flex:1">👌 Passt</button>
+          <button class="btn sec" data-wkfb="easy" style="flex:1">🥱 Zu leicht</button>
+        </div>
+        <div style="font-size:11.5px;color:var(--dim);margin-top:10px">„Zu leicht" → Level ${Math.min(r.lvl+1,WK_MAXLVL)} · „zu schwer" → Level ${Math.max(r.lvl-1,1)} · +20 XP</div>
+      </div></div>`;
+    $$("[data-wkfb]", el).forEach(b=>b.onclick=()=>fitFinish(b.dataset.wkfb));
+    return;
+  }
+
+  const isRest = r.mode === "rest";
+  const nextInfo = (()=>{
+    if (!isRest) return "";
+    if (r.set <= ex.sets) return `Gleich: Satz ${r.set}/${ex.sets} · ${ex.n}`;
+    const nx = W.ex[r.ex+1]; return nx ? `Gleich: ${nx.n} (${nx.sets} × ${wkReps(nx,r.lvl)} ${nx.unit})` : "";
+  })();
+
+  let center;
+  if (isRest){
+    center = `<div style="font-size:12px;color:var(--dim);font-weight:800;text-transform:uppercase;letter-spacing:.05em">☕️ Pause</div>
+      <div id="fitTime" style="font-size:56px;font-weight:800;font-variant-numeric:tabular-nums;margin:6px 0">${fmtSec(fitLeft())}</div>
+      <div style="font-size:12.5px;color:var(--dim)">${nextInfo}</div>
+      <button class="btn sec" id="fitSkip" style="margin-top:14px">⏭ Pause überspringen</button>`;
+  } else if (r.mode === "timed"){
+    center = `<div style="font-size:12px;color:var(--accent2);font-weight:800;text-transform:uppercase;letter-spacing:.05em">⏱ Läuft – halten!</div>
+      <div id="fitTime" style="font-size:56px;font-weight:800;font-variant-numeric:tabular-nums;margin:6px 0">${fmtSec(fitLeft())}</div>
+      <div style="font-size:12.5px;color:var(--dim)">${ex.n}</div>`;
+  } else if (isTimed){ // ready: Timer-Übung, wartet auf Start
+    center = `<div style="font-size:42px;font-weight:800">${reps} <span style="font-size:17px;color:var(--dim)">Sekunden</span></div>
+      <button class="btn" id="fitGo" style="margin-top:14px;padding:13px 26px;font-size:15px">▶ Timer starten</button>`;
+  } else {
+    center = `<div style="font-size:42px;font-weight:800">${reps} <span style="font-size:17px;color:var(--dim)">${ex.unit}</span></div>
+      <button class="btn" id="fitDoneSet" style="margin-top:14px;padding:13px 26px;font-size:15px">✓ Satz geschafft</button>`;
+  }
+
+  el.innerHTML = `<div style="max-width:560px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <b style="font-size:13px">${W.ico} ${W.name}</b>
+      <button class="iconbtn" id="fitAbort" title="Abbrechen">✕</button>
     </div>
-    <div style="font-size:11.5px;color:var(--dim);margin-top:8px">Feedback beendet das Workout: +20 XP. „Zu leicht" = nächstes Mal Level ${Math.min(lvl+1,WK_MAXLVL)}, „zu schwer" = Level ${Math.max(lvl-1,1)}.</div>
-  `);
-  $$("[data-wkex]").forEach(r=>r.onclick=()=>{
-    const c = $(".wkchk", r); c.textContent = c.textContent==="⬜️" ? "✅" : "⬜️";
-  });
-  $$("[data-wkfb]").forEach(b=>b.onclick=async ()=>{
-    const fb = b.dataset.wkfb;
-    const w = wkState();
-    let nl = w.lvl[day] + (fb==="easy"?1:fb==="hard"?-1:0);
-    // Coach: 2× hintereinander „passt" am selben Tag-Typ → trotzdem ein Level hoch (Progressionsschutz)
-    if (fb==="ok"){
-      const prev = w.log.filter(e=>e.day===day).slice(-2);
-      if (prev.length===2 && prev.every(e=>e.fb==="ok")) nl++;
-    }
-    w.lvl[day] = Math.max(1, Math.min(WK_MAXLVL, nl));
-    w.log.push({ d:dayKey(new Date()), day, lvl, fb });
-    if (w.log.length > 400) w.log = w.log.slice(-400);
-    await saveSetting("workout", w);
-    await saveSetting("xpBonus", (getSetting("xpBonus",0)||0) + 20);
-    closeModal();
-    const stk = wkStreak();
-    toast(WK_QUOTES[Math.floor(Math.random()*WK_QUOTES.length)] + ` +20 XP${stk>1?` · ${stk} Tage Serie 🔥`:""}`);
-    if (w.lvl[day] > lvl) setTimeout(()=>toast(`📈 Coach: Tag ${day} steigt auf Level ${w.lvl[day]}!`), 2600);
-    if (w.lvl[day] < lvl) setTimeout(()=>toast(`👍 Coach: Tag ${day} geht auf Level ${w.lvl[day]} – sauber bleiben, dann wieder hoch.`), 2600);
-    renderHome();
-  });
+    <div class="progressbar" style="margin-bottom:12px"><div style="width:${pct}%"></div></div>
+    <div class="card" style="text-align:center;padding:20px 16px">
+      <div style="font-size:11.5px;color:var(--dim);font-weight:700">Übung ${r.ex+1}/${W.ex.length} · Satz ${Math.min(r.set,ex.sets)}/${ex.sets}</div>
+      <div style="font-size:21px;font-weight:800;margin:6px 0 2px">${ex.n}</div>
+      <div style="margin:8px 0 2px">${center}</div>
+    </div>
+    <div class="card" style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
+      <div style="flex:0 0 auto">${bodySvg(ex.m, 104)}</div>
+      <div style="flex:1;min-width:170px">
+        <div style="font-size:12px;color:var(--accent2);font-weight:700;margin-bottom:4px">${ex.m.join(" · ")}</div>
+        <div style="font-size:12.5px;line-height:1.5;color:var(--dim)">${ex.how}</div>
+      </div>
+    </div>
+  </div>`;
+
+  $("#fitAbort", el).onclick = ()=>{ fitStopTick(); S.fitRun = null; renderFit(); };
+  const go = $("#fitGo", el);
+  if (go) go.onclick = ()=>{ r.mode="timed"; r.t0=Date.now(); r.dur=reps; renderFit(); };
+  const ds = $("#fitDoneSet", el);
+  if (ds) ds.onclick = ()=>fitAdvance();
+  const sk = $("#fitSkip", el);
+  if (sk) sk.onclick = ()=>fitAfterRest();
+
+  if (isRest || r.mode==="timed"){
+    _fitTick = setInterval(()=>{
+      const left = fitLeft();
+      const tEl = document.getElementById("fitTime");
+      if (tEl) tEl.textContent = fmtSec(Math.max(0,left));
+      if (left > 0) return;
+      fitStopTick();
+      if (navigator.vibrate) { try { navigator.vibrate(200); } catch(_){} }
+      if (S.fitRun.mode === "timed") fitAdvance(); else fitAfterRest();
+    }, 250);
+  }
+}
+const fmtSec = s => `${Math.floor(s/60)}:${pad(Math.max(0,s)%60)}`;
+function fitLeft(){ const r=S.fitRun; return r.dur - Math.floor((Date.now()-r.t0)/1000); }
+function fitAdvance(){ // Satz fertig → Pause oder Ende
+  const r = S.fitRun, W = WK_DAYS[r.day], ex = W.ex[r.ex];
+  const lastSet = r.set >= ex.sets, lastEx = r.ex >= W.ex.length-1;
+  if (lastSet && lastEx){ r.mode = "feedback"; renderFit(); return; }
+  r.set++;
+  r.mode = "rest"; r.t0 = Date.now(); r.dur = lastSet ? WK_REST_EX : WK_REST_SET;
+  renderFit();
+}
+function fitAfterRest(){ // Pause vorbei → nächster Satz / nächste Übung
+  const r = S.fitRun, W = WK_DAYS[r.day];
+  fitStopTick();
+  if (r.set > W.ex[r.ex].sets){ r.ex++; r.set = 1; }
+  const ex = W.ex[r.ex];
+  r.mode = ex.unit.startsWith("Sek") ? "ready" : "work";
+  renderFit();
+}
+async function fitFinish(fb){
+  const r = S.fitRun, day = r.day, lvl = r.lvl;
+  const w = wkState();
+  let nl = w.lvl[day] + (fb==="easy"?1:fb==="hard"?-1:0);
+  if (fb==="ok"){ // 2× hintereinander „passt" → trotzdem hoch (Progressionsschutz)
+    const prev = w.log.filter(e=>e.day===day).slice(-2);
+    if (prev.length===2 && prev.every(e=>e.fb==="ok")) nl++;
+  }
+  w.lvl[day] = Math.max(1, Math.min(WK_MAXLVL, nl));
+  w.log.push({ d:dayKey(new Date()), day, lvl, fb });
+  if (w.log.length > 400) w.log = w.log.slice(-400);
+  S.fitRun = null;
+  await saveSetting("workout", w);
+  await saveSetting("xpBonus", (getSetting("xpBonus",0)||0) + 20);
+  const stk = wkStreak();
+  toast(WK_QUOTES[Math.floor(Math.random()*WK_QUOTES.length)] + ` +20 XP${stk>1?` · ${stk} Tage Serie 🔥`:""}`);
+  if (w.lvl[day] > lvl) setTimeout(()=>toast(`📈 Coach: Tag ${day} steigt auf Level ${w.lvl[day]}!`), 2600);
+  if (w.lvl[day] < lvl) setTimeout(()=>toast(`👍 Coach: Tag ${day} geht auf Level ${w.lvl[day]} – sauber bleiben, dann wieder hoch.`), 2600);
+  renderFit();
 }
 function openWorkoutStats(){
   const w = wkState(), today = new Date();
@@ -3408,6 +3642,8 @@ function openWorkoutStats(){
       <span style="font-size:12px;min-width:122px">${WK_DAYS[d].ico} Tag ${d} · ${WK_DAYS[d].name}</span>
       <div style="flex:1;height:9px;border-radius:5px;background:var(--line);overflow:hidden"><div style="width:${Math.round(w.lvl[d]/WK_MAXLVL*100)}%;height:100%;background:var(--accent)"></div></div>
       <span style="font-size:11px;color:var(--dim);min-width:34px;text-align:right">Lv ${w.lvl[d]}</span></div>`).join("");
+  // Trainiert vs. Pause: welche Gruppen zuletzt dran waren
+  const bodyGroups = [...new Set(Object.keys(cnt))];
   openModal(`
     <h3>📈 Workout-Fortschritt</h3>
     <div style="font-size:12.5px;color:var(--dim);margin-bottom:4px">${w.log.length} Workouts gesamt · Serie: ${wkStreak()} Tag(e) 🔥</div>
@@ -3416,6 +3652,7 @@ function openWorkoutStats(){
     <label style="margin-top:16px">Coach-Level pro Tag</label>
     <div>${lvlRows}</div>
     <label style="margin-top:16px">Trainierte Muskelgruppen (14 Tage)</label>
+    <div style="text-align:center;margin-top:6px">${bodySvg(bodyGroups, 130)}</div>
     <div>${mRows}</div>
     <div style="height:14px"></div>
     <button class="btn sec" id="wkClose">Schließen</button>
