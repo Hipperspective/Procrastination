@@ -1,6 +1,6 @@
 /* Wheel of Procrastination – Web (Listen + Arbeitszeit + Statistik) */
 "use strict";
-const APP_VERSION = 61; // muss zur sw.js-Cache-Version passen
+const APP_VERSION = 62; // muss zur sw.js-Cache-Version passen
 
 // ---------- Setup check ----------
 const configured = SUPABASE_URL.startsWith("https://") && !SUPABASE_ANON_KEY.startsWith("HIER");
@@ -1833,6 +1833,7 @@ async function renderHome(){
     </div>
     </div>
     <div class="home-side">
+      <div class="m-sec m-workout">${workoutCardHtml()}</div>
       <div class="m-sec m-pomo">${pomoWidgetHtml()}</div>
       <div class="m-sec m-meds">${medsCardHtml()}</div>
       <div class="m-sec m-todo">${todoPanelHtml()}</div>
@@ -1840,6 +1841,7 @@ async function renderHome(){
     </div>
   `;
   MustQ.wire(el);
+  wireWorkout(el);
   wirePomoWidget(el);
   wireMeds(el);
   wireTodoPanel(el);
@@ -3259,6 +3261,180 @@ function wirePomoWidget(root){
     }
     if (S.tab==="home") renderHome();
   }, 1000);
+}
+
+// ============================================================
+// 💪 Workout-Coach: tägliche 10-Minuten-Einheiten, 3 rotierende Tage
+// Equipment: Klimmzugstange, Matte, 12-kg-Kettlebell
+// ============================================================
+const WK_DAYS = {
+  A: { name:"Push & Beine", ico:"🦵", ex:[
+    { n:"Goblet Squats (KB vor der Brust)", m:["Beine","Po","Core"], base:8, inc:2, unit:"Wdh", sets:3 },
+    { n:"Liegestütze", m:["Brust","Schulter","Trizeps"], base:6, inc:2, unit:"Wdh", sets:3, tip:"Zu schwer? Auf den Knien – zählt genauso." },
+    { n:"KB Press über Kopf (je Seite)", m:["Schulter","Trizeps","Core"], base:4, inc:1, unit:"Wdh", sets:2, tip:"Langsam & kontrolliert, Bauch fest." },
+    { n:"Plank", m:["Core"], base:20, inc:10, unit:"Sek", sets:2 },
+  ]},
+  B: { name:"Pull & Klimmzug-Aufbau", ico:"🆙", ex:[
+    { n:"Negativ-Klimmzüge", m:["Rücken","Bizeps"], base:3, inc:1, unit:"Wdh", sets:3, tip:"Hochspringen, 3–5 Sek langsam ablassen. DER Weg zum ersten Klimmzug." },
+    { n:"KB Rows vorgebeugt (je Seite)", m:["Rücken","Bizeps"], base:8, inc:2, unit:"Wdh", sets:3 },
+    { n:"Hängen an der Stange", m:["Griffkraft","Schulter"], base:15, inc:5, unit:"Sek", sets:2, tip:"Schultern aktiv nach unten ziehen." },
+    { n:"Superman-Hold", m:["Unterer Rücken","Po"], base:20, inc:5, unit:"Sek", sets:2 },
+  ]},
+  C: { name:"Swings & Core", ico:"🔥", ex:[
+    { n:"KB Swings", m:["Po","Beine","Rücken","Ausdauer"], base:10, inc:3, unit:"Wdh", sets:4, tip:"Hüfte schnappt – die Arme schwingen nur mit." },
+    { n:"KB Deadlifts", m:["Beine","Po","Unterer Rücken"], base:8, inc:2, unit:"Wdh", sets:2, tip:"Rücken gerade, Gewicht nah am Körper." },
+    { n:"Russian Twists (KB halten)", m:["Core"], base:10, inc:4, unit:"Wdh", sets:2 },
+    { n:"Mountain Climbers", m:["Core","Ausdauer"], base:20, inc:6, unit:"Wdh", sets:2 },
+  ]},
+};
+const WK_ORDER = ["A","B","C"];
+const WK_MAXLVL = 12;
+const WK_QUOTES = [
+  "Stark! Der schwerste Teil war anfangen. 💪",
+  "10 Minuten, die dein Zukunfts-Ich feiert. 🙌",
+  "Konstanz schlägt Intensität – und du lieferst. 🔥",
+  "Wieder ein Stein auf der Mauer. 🧱",
+  "Dein erster Klimmzug rückt näher. 🆙",
+  "Sauber! Training erledigt, Kopf frei. ✨",
+];
+function wkState(){
+  const w = getSetting("workout", null);
+  return (w && w.lvl) ? w : { lvl:{A:1,B:1,C:1}, log:[] };
+}
+const wkReps = (ex, lvl) => ex.base + (Math.min(lvl, WK_MAXLVL)-1)*ex.inc;
+function wkNextDay(){
+  const log = wkState().log;
+  if (!log.length) return "A";
+  return WK_ORDER[(WK_ORDER.indexOf(log[log.length-1].day)+1) % 3];
+}
+const wkDoneToday = () => wkState().log.some(e=>e.d===dayKey(new Date()));
+function wkStreak(){
+  const days = new Set(wkState().log.map(e=>e.d));
+  let n = 0; const d = new Date();
+  if (!days.has(dayKey(d))) d.setDate(d.getDate()-1);
+  while (days.has(dayKey(d))){ n++; d.setDate(d.getDate()-1); }
+  return n;
+}
+function workoutCardHtml(){
+  const st = wkState(), day = wkNextDay(), W = WK_DAYS[day], stk = wkStreak();
+  const inner = wkDoneToday()
+    ? `<div style="font-size:13px;color:var(--green);font-weight:700">✅ Heute erledigt${stk>1?` · Serie: ${stk} Tage 🔥`:""}</div>`
+    : `<div style="font-size:12.5px;color:var(--dim);margin-bottom:8px">Heute: <b style="color:var(--text)">${W.ico} Tag ${day} – ${W.name}</b> · Level ${st.lvl[day]}${stk>1?` · Serie: ${stk} Tage 🔥`:""}</div>
+       <button class="btn small" id="wkStart" style="width:100%">▶ 10 Min starten</button>`;
+  return `<div class="card" id="wkCard" style="border-left:4px solid var(--green)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <b style="font-size:13.5px">💪 Workout</b>
+      <span style="display:flex;gap:10px"><a id="wkStats" style="cursor:pointer;font-size:12px">📈</a><a id="wkFood" style="cursor:pointer;font-size:12px">🍗</a></span>
+    </div>${inner}</div>`;
+}
+function wireWorkout(root){
+  const s = $("#wkStart", root); if (s) s.onclick = openWorkoutModal;
+  const st = $("#wkStats", root); if (st) st.onclick = openWorkoutStats;
+  const f = $("#wkFood", root); if (f) f.onclick = openWorkoutFood;
+}
+function openWorkoutModal(){
+  const stt = wkState(), day = wkNextDay(), W = WK_DAYS[day], lvl = stt.lvl[day];
+  openModal(`
+    <h3>${W.ico} Tag ${day} – ${W.name} <span style="font-size:12px;color:var(--dim);font-weight:600">Level ${lvl}</span></h3>
+    <div style="font-size:12px;color:var(--dim);margin-bottom:10px">~10 Minuten · zwischen den Übungen 30–60 Sek Pause. Technik vor Tempo!</div>
+    ${W.ex.map((ex,i)=>`
+      <div class="wt-entry" style="cursor:pointer;align-items:flex-start" data-wkex="${i}">
+        <div style="display:flex;gap:9px;align-items:flex-start">
+          <span class="wkchk" data-i="${i}" style="font-size:17px;line-height:1.3">⬜️</span>
+          <div><div class="t">${ex.n}</div>
+          <div class="n">${ex.sets} × ${wkReps(ex,lvl)} ${ex.unit} · <span style="opacity:.8">${ex.m.join(" · ")}</span></div>
+          ${ex.tip?`<div class="n" style="color:var(--accent2)">💡 ${ex.tip}</div>`:""}</div>
+        </div>
+      </div>`).join("")}
+    <label style="margin-top:14px">Wie war's? (passt den Coach an)</label>
+    <div style="display:flex;gap:8px;margin-top:6px">
+      <button class="btn sec" data-wkfb="hard" style="flex:1">😮‍💨 Zu schwer</button>
+      <button class="btn" data-wkfb="ok" style="flex:1">👌 Passt</button>
+      <button class="btn sec" data-wkfb="easy" style="flex:1">🥱 Zu leicht</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--dim);margin-top:8px">Feedback beendet das Workout: +20 XP. „Zu leicht" = nächstes Mal Level ${Math.min(lvl+1,WK_MAXLVL)}, „zu schwer" = Level ${Math.max(lvl-1,1)}.</div>
+  `);
+  $$("[data-wkex]").forEach(r=>r.onclick=()=>{
+    const c = $(".wkchk", r); c.textContent = c.textContent==="⬜️" ? "✅" : "⬜️";
+  });
+  $$("[data-wkfb]").forEach(b=>b.onclick=async ()=>{
+    const fb = b.dataset.wkfb;
+    const w = wkState();
+    let nl = w.lvl[day] + (fb==="easy"?1:fb==="hard"?-1:0);
+    // Coach: 2× hintereinander „passt" am selben Tag-Typ → trotzdem ein Level hoch (Progressionsschutz)
+    if (fb==="ok"){
+      const prev = w.log.filter(e=>e.day===day).slice(-2);
+      if (prev.length===2 && prev.every(e=>e.fb==="ok")) nl++;
+    }
+    w.lvl[day] = Math.max(1, Math.min(WK_MAXLVL, nl));
+    w.log.push({ d:dayKey(new Date()), day, lvl, fb });
+    if (w.log.length > 400) w.log = w.log.slice(-400);
+    await saveSetting("workout", w);
+    await saveSetting("xpBonus", (getSetting("xpBonus",0)||0) + 20);
+    closeModal();
+    const stk = wkStreak();
+    toast(WK_QUOTES[Math.floor(Math.random()*WK_QUOTES.length)] + ` +20 XP${stk>1?` · ${stk} Tage Serie 🔥`:""}`);
+    if (w.lvl[day] > lvl) setTimeout(()=>toast(`📈 Coach: Tag ${day} steigt auf Level ${w.lvl[day]}!`), 2600);
+    if (w.lvl[day] < lvl) setTimeout(()=>toast(`👍 Coach: Tag ${day} geht auf Level ${w.lvl[day]} – sauber bleiben, dann wieder hoch.`), 2600);
+    renderHome();
+  });
+}
+function openWorkoutStats(){
+  const w = wkState(), today = new Date();
+  // Wochen-Chart: letzte 8 Wochen (Mo-basiert), Ziel 7
+  const weekKey = d => { const x=new Date(d+"T12:00:00"); x.setDate(x.getDate()-((x.getDay()+6)%7)); return dayKey(x); };
+  const weeks = [];
+  for (let i=7;i>=0;i--){ const d=new Date(today); d.setDate(d.getDate()-i*7); weeks.push(weekKey(dayKey(d))); }
+  const perWeek = {}; w.log.forEach(e=>{ const k=weekKey(e.d); perWeek[k]=(perWeek[k]||0)+1; });
+  const bars = weeks.map(k=>{ const n = Math.min(7, perWeek[k]||0);
+    const d = new Date(k+"T12:00:00");
+    return `<div style="display:flex;flex-direction:column;align-items:center;gap:3px;flex:1">
+      <div style="font-size:10px;color:var(--dim);font-weight:700">${n||""}</div>
+      <div style="width:70%;max-width:26px;height:${Math.max(3,n/7*64)}px;border-radius:6px 6px 2px 2px;background:${n>=5?"var(--green)":n>=3?"var(--accent)":"var(--line)"}"></div>
+      <div style="font-size:9px;color:var(--dim2)">${d.getDate()}.${d.getMonth()+1}.</div></div>`; }).join("");
+  // Muskelgruppen der letzten 14 Tage
+  const since = new Date(); since.setDate(since.getDate()-14);
+  const cnt = {};
+  w.log.filter(e=>e.d>=dayKey(since)).forEach(e=>(WK_DAYS[e.day]?.ex||[]).forEach(ex=>ex.m.forEach(m=>cnt[m]=(cnt[m]||0)+1)));
+  const mx = Math.max(1, ...Object.values(cnt));
+  const MICO = { "Beine":"🦵","Po":"🍑","Core":"🧱","Brust":"💥","Schulter":"🏐","Trizeps":"🔱","Rücken":"🔙","Bizeps":"💪","Griffkraft":"✊","Unterer Rücken":"🧯","Ausdauer":"❤️" };
+  const mRows = Object.entries(cnt).sort((a,b)=>b[1]-a[1]).map(([m,n])=>
+    `<div style="display:flex;align-items:center;gap:8px;margin-top:5px">
+      <span style="font-size:12px;min-width:122px">${MICO[m]||"🏋️"} ${m}</span>
+      <div style="flex:1;height:9px;border-radius:5px;background:var(--line);overflow:hidden"><div style="width:${Math.round(n/mx*100)}%;height:100%;background:var(--grad)"></div></div>
+      <span style="font-size:11px;color:var(--dim);min-width:18px;text-align:right">${n}×</span></div>`).join("")
+    || `<div class="section-empty">Noch keine Workouts in den letzten 14 Tagen.</div>`;
+  const lvlRows = WK_ORDER.map(d=>`<div style="display:flex;align-items:center;gap:8px;margin-top:5px">
+      <span style="font-size:12px;min-width:122px">${WK_DAYS[d].ico} Tag ${d} · ${WK_DAYS[d].name}</span>
+      <div style="flex:1;height:9px;border-radius:5px;background:var(--line);overflow:hidden"><div style="width:${Math.round(w.lvl[d]/WK_MAXLVL*100)}%;height:100%;background:var(--accent)"></div></div>
+      <span style="font-size:11px;color:var(--dim);min-width:34px;text-align:right">Lv ${w.lvl[d]}</span></div>`).join("");
+  openModal(`
+    <h3>📈 Workout-Fortschritt</h3>
+    <div style="font-size:12.5px;color:var(--dim);margin-bottom:4px">${w.log.length} Workouts gesamt · Serie: ${wkStreak()} Tag(e) 🔥</div>
+    <label style="margin-top:12px">Workouts pro Woche (Ziel: 7)</label>
+    <div style="display:flex;align-items:flex-end;gap:4px;margin-top:8px;height:96px">${bars}</div>
+    <label style="margin-top:16px">Coach-Level pro Tag</label>
+    <div>${lvlRows}</div>
+    <label style="margin-top:16px">Trainierte Muskelgruppen (14 Tage)</label>
+    <div>${mRows}</div>
+    <div style="height:14px"></div>
+    <button class="btn sec" id="wkClose">Schließen</button>
+  `);
+  $("#wkClose").onclick = closeModal;
+}
+function openWorkoutFood(){
+  openModal(`
+    <h3>🍗 Ernährung & Creatin</h3>
+    <div style="font-size:13px;line-height:1.55">
+      <b>Protein</b> ist der Hebel Nr. 1 für Muskelaufbau: Ziel <b>1,6–2,2 g pro kg Körpergewicht</b> – bei deinen ~80 kg also <b>130–175 g pro Tag</b>. Zum Einordnen: 1 Ei ≈ 7 g, 250 g Magertopfen ≈ 30 g, 1 Hühnerbrust ≈ 50 g, 1 Scoop Whey ≈ 25 g. Auf 3–4 Mahlzeiten verteilen.<br><br>
+      <b>Creatin Monohydrat</b> ist das am besten untersuchte Supplement überhaupt: <b>3–5 g täglich</b>, Uhrzeit egal, einfach in Wasser oder Saft – auch an trainingsfreien Tagen. Keine „Ladephase" nötig, Wirkung baut sich über 3–4 Wochen auf (etwas mehr Kraft & Wiederholungen, leichte Wassereinlagerung im Muskel ist normal). Dazu generell genug trinken.<br><br>
+      <b>Sonst:</b> kein Kalorienzählen nötig bei deinem Ziel – iss dich satt mit viel Protein, Gemüse und echten Lebensmitteln, und gönn dir rund ums Training Kohlenhydrate. Schlaf ist dein bestes „Supplement".<br><br>
+      <span style="font-size:11.5px;color:var(--dim)">Hinweis: keine medizinische Beratung. Wenn du regelmäßig Medikamente nimmst oder Nierenprobleme hast, Creatin kurz mit Arzt/Ärztin abklären.</span>
+    </div>
+    <div style="height:14px"></div>
+    <button class="btn sec" id="wkClose2">Schließen</button>
+  `);
+  $("#wkClose2").onclick = closeModal;
 }
 
 // ============================================================
